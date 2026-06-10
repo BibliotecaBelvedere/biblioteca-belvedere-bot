@@ -50,14 +50,30 @@ def search_text_catalog(query, max_results=5):
         return []
     
     matched_blocks = []
+    
+    # Se il file è stato letto come un unico grande blocco, lo dividiamo riga per riga
+    # per analizzare i singoli libri nel testo del catalogo
+    righe_catalogo = []
     for blocco in BLOCCHI_LIBRI:
-        blocco_n = normalize(blocco)
-        # Se tutti i termini inseriti dall'utente (o almeno la maggior parte) sono nel blocco, lo prendiamo
-        score = sum(1 for term in terms if term in blocco_n)
-        if score > 0:
-            matched_blocks.append((blocco, score))
+        righe_catalogo.extend(blocco.split('\n'))
+        
+    # Uniamo le righe a gruppi di 3 o 4 per ricostruire le informazioni di un libro completo
+    # (Titolo, Autore, Collocazione spesso sono su righe consecutive nel file di testo)
+    for i in range(len(righe_catalogo)):
+        # Creiamo una "finestra" di testo di 4 righe per catturare il contesto del libro
+        contesto_libro = "\n".join(righe_catalogo[i:i+4])
+        contesto_n = normalize(contesto_libro)
+        
+        # Calcoliamo quante parole cercate dall'utente sono presenti in queste 4 righe
+        score = sum(1 for term in terms if term in contesto_n)
+        
+        # Se troviamo una corrispondenza forte (es. c'è il titolo o l'autore)
+        if score == len(terms) or (len(terms) > 1 and score >= len(terms) - 1):
+            # Verifichiamo se questa corrispondenza non sia già stata salvata per evitare duplicati
+            if not any(normalize(m[0][:30]) == normalize(contesto_libro[:30]) for m in matched_blocks):
+                matched_blocks.append((contesto_libro, score))
             
-    # Ordiniamo i blocchi per rilevanza (punteggio più alto)
+    # Ordiniamo per punteggio di rilevanza
     matched_blocks.sort(key=lambda x: -x[1])
     return [b[0] for b in matched_blocks[:max_results]]
 
