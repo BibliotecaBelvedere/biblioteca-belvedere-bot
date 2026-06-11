@@ -10,19 +10,6 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 CATALOGO_FILE = "catalogo.txt"
-RIGHE_CATALOGO = []
-
-# CARICAMENTO UNICO ALL'AVVIO: Così il server legge il file una volta sola e non va in timeout
-if os.path.exists(CATALOGO_FILE):
-    try:
-        with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
-            # Leggiamo tutto e filtriamo le righe vuote per risparmiare memoria RAM
-            RIGHE_CATALOGO = [linea.strip() for linea in f.readlines() if linea.strip()]
-        print(f"SUCCESSO: Caricate {len(RIGHE_CATALOGO)} righe di catalogo all'avvio.")
-    except Exception as e:
-        print(f"ERRORE nel caricamento del file di testo: {str(e)}")
-else:
-    print(f"ATTENZIONE: File {CATALOGO_FILE} non trovato!")
 
 STOPWORDS = {
     'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
@@ -30,7 +17,7 @@ STOPWORDS = {
     'con','una','uno','gli','alla','allo','alle','agli','col','coi','tra','fra',
     'non','qui','qua','sua','suo','suoi','sue','mio','mia','miei','mie','tuo',
     'tua','tuoi','tue','questo','questa','questi','queste','quello','quella',
-    'quelli','quelle','anche','comme','dove','quando','mentre','essere','avere',
+    'quelli','quelle','anche','come','dove','quando','mentre','essere','avere',
     'fare','dire','cerca','cerco','vorrei','voglio','cercare','trovare','libro',
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un'
@@ -44,30 +31,42 @@ def normalize(s):
 def search_text_catalog(query, max_results=3):
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
-    if not terms or not RIGHE_CATALOGO:
+    if not terms:
         return []
     
     matched_blocks = []
-    tot_righe = len(RIGHE_CATALOGO)
     
-    # La ricerca ora è istantanea perché le righe sono già caricate in memoria
-    for i in range(tot_righe):
-        # Prendiamo una finestra di 4 righe consecutive per catturare titolo e collocazione
-        fine = min(i + 4, tot_righe)
-        contesto_libro = "\n".join(RIGHE_CATALOGO[i:fine])
-        contesto_n = normalize(contesto_libro)
+    # Leggiamo il file SOLO al momento della richiesta riga per riga (on-demand)
+    # Questo evita qualsiasi timeout all'avvio del server!
+    if not os.path.exists(CATALOGO_FILE):
+        return ["ERRORE: File catalogo.txt non trovato sul server GitHub."]
         
-        score = sum(1 for term in terms if term in contesto_n)
-        if score > 0:
-            if not any(normalize(m[0][:30]) == normalize(contesto_libro[:30]) for m in matched_blocks):
-                matched_blocks.append((contesto_libro, score))
-                
-    matched_blocks.sort(key=lambda x: -x[1])
-    return [b[0] for b in matched_blocks[:max_results]]
+    try:
+        with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
+            # Leggiamo solo le righe reali popolatesi
+            righe = [linea.strip() for linea in f.readlines() if linea.strip()]
+            
+        tot_righe = len(righe)
+        for i in range(tot_righe - 3):
+            contesto_libro = "\n".join(righe[i:i+4])
+            contesto_n = normalize(contesto_libro)
+            
+            score = sum(1 for term in terms if term in contesto_n)
+            if score > 0:
+                if not any(normalize(m[0][:30]) == normalize(contesto_libro[:30]) for m in matched_blocks):
+                    matched_blocks.append((contesto_libro, score))
+                    
+        matched_blocks.sort(key=lambda x: -x[1])
+        return [b[0] for b in matched_blocks[:max_results]]
+    except Exception as e:
+        return [f"Errore lettura catalogo: {str(e)}"]
 
 def ask_claude(user_message, text_results):
     if not text_results:
         return "Mi dispiace, questo volume non risulta nel catalogo della nostra sede."
+        
+    if "ERRORE" in text_results[0] or "Errore" in text_results[0]:
+        return text_results[0]
 
     context = "\n\n---\n\n".join(text_results)
 
@@ -93,13 +92,13 @@ def ask_claude(user_message, text_results):
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_message}],
             },
-            timeout=10,
+            timeout=12,
         )
         if response.status_code != 200:
-            return "Nota: Al momento non riesco a collegarmi al sistema centrale di intelligenza artificiale."
+            return f"Errore API Claude (Codice {response.status_code}). Verifica la chiave ANTHROPIC_API_KEY nelle impostazioni di Render."
         return "".join(c.get("text", "") for c in response.json().get("content", []))
     except Exception as e:
-        return "Errore temporaneo di comunicazione con l'IA."
+        return f"Errore di comunicazione con l'IA: {str(e)}"
 
 def send_telegram(chat_id, text):
     try:
@@ -113,39 +112,40 @@ def send_telegram(chat_id, text):
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    data = request.get_json()
-    if not data or "message" not in data:
-        return "OK", 200
+    try:
+        data = request.get_json()
+        if not data or "message" not in data:
+            return "OK", 200
+            
+        message = data["message"]
+        chat_id = message.get("chat", {}).get("id")
+        text = message.get("text", "").strip()
         
-    message = data["message"]
-    chat_id = message.get("chat", {}).get("id")
-    text = message.get("text", "").strip()
-    
-    if not chat_id or not text:
-        return "OK", 200
-        
-    if text == "/start":
-        send_telegram(chat_id, "Ciao! Sono l'assistente della Biblioteca Belvedere 📚 Scrivimi il titolo di un libro per cercarlo.")
-        return "OK", 200
-        
-    results = search_text_catalog(text)
-    reply = ask_claude(text, results)
-    send_telegram(chat_id, reply)
+        if not chat_id or not text:
+            return "OK", 200
+            
+        if text == "/start":
+            send_telegram(chat_id, "Ciao! Sono l'assistente della Biblioteca Belvedere 📚 Scrivimi il titolo di un libro per cercarlo.")
+            return "OK", 200
+            
+        results = search_text_catalog(text)
+        reply = ask_claude(text, results)
+        send_telegram(chat_id, reply)
+    except Exception as general_error:
+        # Se succede QUALSIASI problema, invia l'errore direttamente su Telegram così sappiamo cos'è!
+        if 'chat_id' in locals():
+            send_telegram(chat_id, f"Errore imprevisto nel server: {str(general_error)}")
     return "OK", 200
 
 @app.route("/setup", methods=["GET"])
 def setup():
     render_url = request.host_url.rstrip("/")
-    result = set_webhook(render_url)
-    return jsonify(result)
-
-def set_webhook(url):
-    resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{url}/telegram"}, timeout=10)
-    return resp.json()
+    resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/telegram"}, timeout=10)
+    return jsonify(resp.json())
 
 @app.route("/", methods=["GET"])
 def home():
-    return f"Assistente Online - {len(RIGHE_CATALOGO)} righe pronte.", 200
+    return "Sistema Pronto e Leggero.", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
