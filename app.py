@@ -1,5 +1,6 @@
 import os
 import requests
+import unicodedata
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -8,30 +9,65 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# CATALOGO FINTO DI TEST (Scritto direttamente qui, zero file esterni da caricare!)
-LIBRI_TEST = [
-    "Titolo: Il nome della rosa - Autore: Umberto Eco - Collocazione: Sala A, Scaffale 3",
-    "Titolo: Il pendolo di Foucault - Autore: Umberto Eco - Collocazione: Sala A, Scaffale 4",
-    "Titolo: Trent'anni e un giorno - Autore: Testo Esempio - Collocazione: I 19-1"
-]
+CATALOGO_FILE = "catalogo.txt"
 
-def search_test(query):
-    q = query.lower()
-    risultati = []
-    for libro in LIBRI_TEST:
-        if q in libro.lower():
-            risultati.append(libro)
-    return risultati
+STOPWORDS = {
+    'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
+    'nel','nella','nelle','negli','nei','sul','sulla','sulle','sugli','sui','per',
+    'con','una','uno','gli','alla','allo','alle','agli','col','coi','tra','fra',
+    'non','qui','qua','sua','suo','suoi','sue','mio','mia','miei','mie','tuo',
+    'tua','tuoi','tue','questo','questa','questi','queste','quello','quella',
+    'quelli','quelle','anche','come','dove','quando','mentre','essere','avere',
+    'fare','dire','cerca','cerco','vorrei','voglio','cercare','trovare','libro',
+    'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
+    'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un'
+}
+
+def normalize(s):
+    s = str(s).lower()
+    s = unicodedata.normalize("NFD", s)
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+def search_text_catalog(query, max_results=3):
+    q = normalize(query)
+    terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
+    if not terms:
+        return []
+    
+    matched_blocks = []
+    
+    if not os.path.exists(CATALOGO_FILE):
+        return []
+        
+    try:
+        # Apriamo con utf-8 per tollerare Čehov, Šiškin, Śāntideva ecc.
+        with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
+            contenuto = f.read()
+            # Dividiamo il catalogo per blocchi reali separati da righe vuote
+            blocchi = [b.strip() for b in contenuto.split("\n\n") if b.strip()]
+            
+        for blocco in blocchi:
+            blocco_n = normalize(blocco)
+            score = sum(1 for term in terms if term in blocco_n)
+            if score > 0:
+                matched_blocks.append((blocco, score))
+                    
+        matched_blocks.sort(key=lambda x: -x[1])
+        return [b[0] for b in matched_blocks[:max_results]]
+    except:
+        return []
 
 def ask_claude(user_message, text_results):
     if not text_results:
-        return "Mi dispiace, questo volume non risulta nel catalogo di test della nostra sede."
+        return "Mi dispiace, questo volume non risulta nel catalogo della nostra sede."
 
-    context = "\n".join(text_results)
+    context = "\n\n---\n\n".join(text_results)
     system_prompt = (
-        "Sei l'assistente della Biblioteca Belvedere. Rispondi in modo conciso.\n\n"
+        "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale e conciso.\n\n"
         f"Dati del catalogo:\n{context}\n\n"
-        "Mostra il titolo e la collocazione esatta. Non aggiungere altro."
+        "ISTRUZIONI:\n"
+        "Mostra il titolo del libro e la sua COLLOCAZIONE ESATTA presa dai dati sopra. "
+        "Non inventare nulla. Chiudi la risposta subito dopo aver fornito il libro."
     )
 
     try:
@@ -44,15 +80,15 @@ def ask_claude(user_message, text_results):
             },
             json={
                 "model": "claude-3-haiku-20240307",
-                "max_tokens": 200,
+                "max_tokens": 300,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_message}],
             },
-            timeout=10,
+            timeout=12,
         )
         return "".join(c.get("text", "") for c in response.json().get("content", []))
     except:
-        return "Errore di comunicazione con l'IA."
+        return "Errore temporaneo di comunicazione con l'IA."
 
 def send_telegram(chat_id, text):
     try:
@@ -74,10 +110,10 @@ def telegram_webhook():
         return "OK", 200
         
     if text == "/start":
-        send_telegram(chat_id, "TEST ATTIVO! Il server risponde. Scrivimi un titolo (es. 'rosa' o 'eco') per testare la ricerca.")
+        send_telegram(chat_id, "Ciao! Sono l'assistente della Biblioteca Belvedere 📚 Scrivimi il titolo di un libro o un autore per cercarlo nel catalogo.")
         return "OK", 200
         
-    results = search_test(text)
+    results = search_text_catalog(text)
     reply = ask_claude(text, results)
     send_telegram(chat_id, reply)
     return "OK", 200
@@ -90,7 +126,7 @@ def setup():
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Server in modalità TEST di isolamento.", 200
+    return "Assistente Biblioteca Pronto.", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
