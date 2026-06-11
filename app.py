@@ -38,22 +38,20 @@ def search_text_catalog(query, max_results=3):
         return []
     
     if not os.path.exists(CATALOGO_FILE):
-        return ["ERRORE TECNICO: File catalogo.txt non trovato sul server."]
+        return ["ERRORE TECNICO: File catalogo.txt non trovato."]
         
     try:
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        # Sistema di divisione flessibile: tollera sia \n\n sia \r\n\r\n
         contenuto_pulito = contenuto.replace("\r\n", "\n")
         blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
         
-        # SE IL FILE NON HA DOPPI A CAPO: usiamo un piano B d'emergenza a scorrimento di righe
         if len(blocchi) <= 1:
             righe = [r.strip() for r in contenuto_pulito.split("\n") if r.strip()]
             blocchi = []
             for i in range(0, len(righe), 4):
-                gruppo = "\n".join(righe[i:i+6]) # Aggrega pacchetti di 6 righe alla volta
+                gruppo = "\n".join(righe[i:i+6])
                 blocchi.append(gruppo)
                 
         matched_blocks = []
@@ -94,7 +92,8 @@ def ask_claude(user_message, text_results):
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-3-haiku-20240307",
+                # ABBIAMO AGGIORNATO IL MODELLO ALLA VERSIONE CORRETTA E ATTIVA
+                "model": "claude-3-5-haiku-latest",
                 "max_tokens": 400,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_message}],
@@ -136,7 +135,7 @@ def telegram_webhook():
         send_telegram(chat_id, reply)
     except Exception as general_error:
         if 'chat_id' in locals():
-            send_telegram(chat_id, f"Errore imprevisto elaborazione: {str(general_error)}")
+            send_telegram(chat_id, f"Errore imprevisto: {str(general_error)}")
     return "OK", 200
 
 @app.route("/setup", methods=["GET"])
