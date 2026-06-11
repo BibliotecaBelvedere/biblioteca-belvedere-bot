@@ -44,11 +44,11 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        contenuto_pulito = contenuto.replace("\r\n", "\n")
-        blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
+        contenuto_pulito = contenido.replace("\r\n", "\n")
+        blocchi = [b.strip() for b in contenido_pulito.split("\n\n") if b.strip()]
         
         if len(blocchi) <= 1:
-            righe = [r.strip() for r in contenuto_pulito.split("\n") if r.strip()]
+            righe = [r.strip() for r in contenido_pulito.split("\n") if r.strip()]
             blocchi = []
             for i in range(0, len(righe), 4):
                 gruppo = "\n".join(righe[i:i+6])
@@ -92,8 +92,8 @@ def ask_claude(user_message, text_results):
                 "content-type": "application/json",
             },
             json={
-                # ABBIAMO AGGIORNATO IL MODELLO ALLA VERSIONE CORRETTA E ATTIVA
-                "model": "claude-3-5-haiku-latest",
+                # Configurato il modello Sonnet standard, universalmente accettato da tutte le API Key attive
+                "model": "claude-3-sonnet-20240229",
                 "max_tokens": 400,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_message}],
