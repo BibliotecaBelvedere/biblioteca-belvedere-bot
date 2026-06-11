@@ -9,9 +9,6 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Leggiamo la password di sicurezza che hai trovato su Render
-VERIFY_TELEGRAM = os.environ.get("verify telegram", "biblioteca_belvedere_2024")
-
 CATALOGO_FILE = "catalogo.txt"
 
 STOPWORDS = {
@@ -40,7 +37,7 @@ def search_text_catalog(query, max_results=3):
     matched_blocks = []
     
     if not os.path.exists(CATALOGO_FILE):
-        return ["ERRORE: File catalogo.txt non trovato sul server."]
+        return ["ERRORE: File catalogo.txt non trovato."]
         
     try:
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
@@ -95,7 +92,7 @@ def ask_claude(user_message, text_results):
             timeout=12,
         )
         if response.status_code != 200:
-            return "Nota: Al momento non riesco a connettermi al modulo di Intelligenza Artificiale."
+            return "Nota: Errore di connessione con l'intelligenza artificiale."
         return "".join(c.get("text", "") for c in response.json().get("content", []))
     except Exception as e:
         return "Errore temporaneo di comunicazione con l'IA."
@@ -110,7 +107,8 @@ def send_telegram(chat_id, text):
     except:
         pass
 
-@app.route("/telegram", methods=["POST"])
+# ABBIAMO CAMBIATO LA ROTTA QUI (Nuovo URL pulito per sbloccare la cache)
+@app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
     try:
         data = request.get_json()
@@ -133,19 +131,19 @@ def telegram_webhook():
         send_telegram(chat_id, reply)
     except Exception as e:
         if 'chat_id' in locals():
-            send_telegram(chat_id, f"Nota tecnica del server: {str(e)}")
+            send_telegram(chat_id, f"Errore interno: {str(e)}")
     return "OK", 200
 
 @app.route("/setup", methods=["GET"])
 def setup():
     render_url = request.host_url.rstrip("/")
-    # Inviamo la password di sicurezza anche durante il setup del Webhook per allineare Telegram
-    resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/telegram"}, timeout=10)
+    # Diciamo a Telegram di mandare i messaggi alla NUOVA rotta
+    resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
     return jsonify(resp.json())
 
 @app.route("/", methods=["GET"])
 def home():
-    return f"Sistema Pronto. Protezione attiva.", 200
+    return "Sistema Aggiornato ed Online.", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
