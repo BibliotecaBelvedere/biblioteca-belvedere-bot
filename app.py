@@ -9,6 +9,9 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+# Leggiamo la password di sicurezza che hai trovato su Render
+VERIFY_TELEGRAM = os.environ.get("verify telegram", "biblioteca_belvedere_2024")
+
 CATALOGO_FILE = "catalogo.txt"
 
 STOPWORDS = {
@@ -36,14 +39,11 @@ def search_text_catalog(query, max_results=3):
     
     matched_blocks = []
     
-    # Leggiamo il file SOLO al momento della richiesta riga per riga (on-demand)
-    # Questo evita qualsiasi timeout all'avvio del server!
     if not os.path.exists(CATALOGO_FILE):
-        return ["ERRORE: File catalogo.txt non trovato sul server GitHub."]
+        return ["ERRORE: File catalogo.txt non trovato sul server."]
         
     try:
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
-            # Leggiamo solo le righe reali popolatesi
             righe = [linea.strip() for linea in f.readlines() if linea.strip()]
             
         tot_righe = len(righe)
@@ -95,10 +95,10 @@ def ask_claude(user_message, text_results):
             timeout=12,
         )
         if response.status_code != 200:
-            return f"Errore API Claude (Codice {response.status_code}). Verifica la chiave ANTHROPIC_API_KEY nelle impostazioni di Render."
+            return "Nota: Al momento non riesco a connettermi al modulo di Intelligenza Artificiale."
         return "".join(c.get("text", "") for c in response.json().get("content", []))
     except Exception as e:
-        return f"Errore di comunicazione con l'IA: {str(e)}"
+        return "Errore temporaneo di comunicazione con l'IA."
 
 def send_telegram(chat_id, text):
     try:
@@ -131,21 +131,21 @@ def telegram_webhook():
         results = search_text_catalog(text)
         reply = ask_claude(text, results)
         send_telegram(chat_id, reply)
-    except Exception as general_error:
-        # Se succede QUALSIASI problema, invia l'errore direttamente su Telegram così sappiamo cos'è!
+    except Exception as e:
         if 'chat_id' in locals():
-            send_telegram(chat_id, f"Errore imprevisto nel server: {str(general_error)}")
+            send_telegram(chat_id, f"Nota tecnica del server: {str(e)}")
     return "OK", 200
 
 @app.route("/setup", methods=["GET"])
 def setup():
     render_url = request.host_url.rstrip("/")
+    # Inviamo la password di sicurezza anche durante il setup del Webhook per allineare Telegram
     resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/telegram"}, timeout=10)
     return jsonify(resp.json())
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Sistema Pronto e Leggero.", 200
+    return f"Sistema Pronto. Protezione attiva.", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
