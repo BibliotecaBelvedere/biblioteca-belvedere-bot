@@ -86,7 +86,6 @@ def ask_gemini(user_message, text_results):
     )
 
     try:
-        # URL CORRETTO: Inclusa la versione v1beta corretta per i modelli di generazione di contenuto stabili
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(
             url,
@@ -94,8 +93,14 @@ def ask_gemini(user_message, text_results):
             json={"contents": [{"parts": [{"text": prompt_completo}]}]},
             timeout=12
         )
+        
+        # LOG DIAGNOSTICO: Se fallisce, estraiamo la vera motivazione del server Google
         if response.status_code != 200:
-            return f"Errore di risposta da Gemini (Stato {response.status_code})"
+            try:
+                errore_esteso = response.json().get("error", {}).get("message", "Dettaglio non disponibile")
+            except:
+                errore_esteso = response.text[:200]
+            return f"Errore di risposta da Gemini (Stato {response.status_code}) - Dettaglio Google: {errore_esteso}"
             
         data = response.json()
         return data['candidates'][0]['content']['parts'][0]['text']
