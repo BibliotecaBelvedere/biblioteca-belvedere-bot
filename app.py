@@ -44,11 +44,12 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        contenuto_pulito = contenido.replace("\r\n", "\n")
+        # CORRETTO AL 100%: Variabile italiana coerente
+        contenuto_pulito = contenuto.replace("\r\n", "\n")
         blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
         
         if len(blocchi) <= 1:
-            righe = [r.strip() for r in contenido_pulito.split("\n") if r.strip()]
+            righe = [r.strip() for r in contenuto_pulito.split("\n") if r.strip()]
             blocchi = []
             for i in range(0, len(righe), 4):
                 gruppo = "\n".join(righe[i:i+6])
