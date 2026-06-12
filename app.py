@@ -35,7 +35,7 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-def search_text_catalog(query, max_results=8):
+def search_text_catalog(query, max_results=15):
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -64,13 +64,12 @@ def search_text_catalog(query, max_results=8):
         for blocco in blocchi:
             blocco_n = normalize(blocco)
             
-            # Gestione facilitata e flessibile per la cucina e sinonimi
+            # Espansione automatica per la cucina e sinonimi
             if "cucin" in q or "ricett" in q or "mangiar" in q:
                 if "cucin" in blocco_n or "ricett" in blocco_n or "gastronom" in blocco_n or "artusi" in blocco_n:
                     matched_blocks.append((blocco, 2))
                     continue
 
-            # Ricerca standard per le altre parole chiave (es. sentimenti)
             score = sum(1 for term in terms if term in blocco_n)
             if score > 0:
                 matched_blocks.append((blocco, score))
@@ -95,7 +94,7 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, text_results):
     if not text_results:
-        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa richiesta tematica."
+        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta."
         
     if "ERRORE" in text_results[0]:
         return text_results[0]
@@ -103,14 +102,17 @@ def ask_gemini(user_message, text_results):
     context = "\n\n---\n\n".join(text_results)
     
     prompt_completo = (
-        "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale, formale e conciso.\n\n"
+        "Sei l'assistente virtuale della Biblioteca Belvedere di Siracusa (codice identificativo SBS0CB).\n"
+        "Rispondi in modo cordiale, formale e conciso.\n\n"
+        "NOTA IMPORTANTE: Il file del catalogo fornito contiene ESCLUSIVAMENTE i libri della Biblioteca Belvedere. "
+        "Pertanto, tutti i libri presenti nei dati estratti sono disponibili presso di noi.\n\n"
         f"Dati del catalogo estratti:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
-        "ISTRUZIONI RIGIDE:\n"
-        "1. Trova ed elenca i libri che corrispondono alla richiesta dell'utente.\n"
-        "2. IMPORTANTE: Elenca SOLO i libri che sono disponibili presso la 'Biblioteca Belvedere' o che mostrano collocazioni compatibili con lo stile di Belvedere (es. codici come 1-3, I 1-3, 21-3, 32a-2, 18-4, ecc.). Se un libro riporta chiaramente SOLO altre biblioteche (es. Augusta, Floridia) e non Belvedere, ignoralo.\n"
-        "3. Per ogni libro valido, indica chiaramente: Titolo, Autore e Collocazione.\n"
-        "4. Sii sintetico e usa un elenco puntato pulito."
+        "ISTRUZIONI DI FORMATTAZIONE:\n"
+        "1. Elenca i libri pertinenti trovati indicandoli chiaramente.\n"
+        "2. Per ogni libro indica: Titolo, Autore e la Collocazione (es. I 1-3, 21-3, ecc.).\n"
+        "3. Se l'utente ha fatto una richiesta tematica generale (es. cucina, sentimenti, ragazzi), mostra tutti i libri inerenti estratti dal testo.\n"
+        "4. Usa un elenco puntato pulito ed elegante, senza aggiungere commenti superflui o inventare informazioni."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
