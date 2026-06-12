@@ -27,14 +27,14 @@ STOPWORDS = {
 
 def normalize(s):
     s = str(s).lower().strip()
-    # Rimuove i simboli di punteggiatura per evitare che "eco?" fallisca la ricerca
     for c in ['?', '!', ',', '.', ';', ':', '-', '_']:
         s = s.replace(c, ' ')
     s = s.replace('č', 'c').replace('š', 's').replace('ś', 's').replace('ā', 'a')
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-def search_text_catalog(query, max_results=3):
+# MODIFICATO: max_results alzato a 15 per catturare tutte le opere dell'autore
+def search_text_catalog(query, max_results=15):
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -77,7 +77,7 @@ def call_gemini_api(model_name, prompt_text):
             url,
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": prompt_text}]}]},
-            timeout=12
+            timeout=15
         )
         return response
     except:
@@ -85,32 +85,32 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, text_results):
     if not text_results:
-        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa ricerca."
+        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa ricerca."
         
     if "ERRORE" in text_results[0]:
         return text_results[0]
 
     context = "\n\n---\n\n".join(text_results)
     
+    # PROMPT OTTIMIZZATO: Forza l'attenzione solo su "Biblioteca Belvedere"
     prompt_completo = (
         "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale, formale e conciso.\n\n"
-        f"Dati del catalogo estratti:\n{context}\n\n"
+        f"Dati del catalogo estratti (contengono varie biblioteche):\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
-        "ISTRUZIONI:\n"
-        "Elenca i libri trovati indicando Titolo, Autore e la COLLOCAZIONE ESATTA.\n"
-        "Se la collocazione contiene codici come '21-0', 'I 13-1', 'I 2 2', mostrala chiaramente.\n"
-        "Non inventare informazioni non presenti nel testo fornito."
+        "ISTRUZIONI RIGIDE:\n"
+        "1. Trova ed elenca TUTTI i libri che corrispondono alla richiesta, ma mostra SOLO quelli che hanno una collocazione sotto la voce 'Biblioteca Belvedere'.\n"
+        "2. Ignora i dati delle altre biblioteche (Augusta, Siracusa, Cassibile, ecc.).\n"
+        "3. Per ogni libro trovato a Belvedere, indica chiaramente: Titolo, Autore e la COLLOCAZIONE di Belvedere (es. 1-3, I 1-3).\n"
+        "4. Se l'autore ha molti libri a Belvedere, elencali tutti in un elenco puntato chiaro.\n"
+        "5. Non inventare informazioni."
     )
 
-    # TENTATIVO 1: Canale principale veloce
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # TENTATIVO 2 (Fallback Intelligente): Aspetta 2 secondi e riprova sul principale
     if not response or response.status_code != 200:
         time.sleep(2)
         response = call_gemini_api("gemini-2.5-flash", prompt_completo)
         
-    # TENTATIVO 3 (Fallback estremo): Modello Pro ufficiale accettato su v1
     if not response or response.status_code != 200:
         response = call_gemini_api("gemini-1.5-pro", prompt_completo)
 
