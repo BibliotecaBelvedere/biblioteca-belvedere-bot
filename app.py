@@ -43,14 +43,14 @@ def search_text_catalog(query, max_results=3):
         
     try:
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
-            contenuto = f.read()
+            testo_catalogo = f.read()
         
-        # VERIFICATO: Qui usiamo 'contenuto' con la U. Nessun refuso.
-        contenuto_pulito = contenuto.replace("\r\n", "\n")
-        blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
+        # VARIABILE PULITA: Usa 'testo_catalogo' al 100%
+        catalogo_pulito = testo_catalogo.replace("\r\n", "\n")
+        blocchi = [b.strip() for b in catalogo_pulito.split("\n\n") if b.strip()]
         
         if len(blocchi) <= 1:
-            righe = [r.strip() for r in contenuto_pulito.split("\n") if r.strip()]
+            righe = [r.strip() for r in catalogo_pulito.split("\n") if r.strip()]
             blocchi = []
             for i in range(0, len(righe), 4):
                 gruppo = "\n".join(righe[i:i+6])
@@ -95,7 +95,7 @@ def ask_gemini(user_message, text_results):
         f"Dati del catalogo estratti:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
         "ISTRUZIONI:\n"
-        "Elenca i libri trovati indicando Titolo, Autore e la COLLOCAZIONE ESATTA.\n"
+        "Elenca i libri trouvanti indicando Titolo, Autore e la COLLOCAZIONE ESATTA.\n"
         "Se la collocazione contiene codici come '21-0', 'I 13-1', 'I 2 2', mostrala chiaramente.\n"
         "Non inventare informazioni non presenti nel testo fornito."
     )
@@ -103,12 +103,12 @@ def ask_gemini(user_message, text_results):
     # TENTATIVO 1: Canale principale veloce
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # TENTATIVO 2: Se va in timeout o dà errore, aspetta 2 secondi e riprova sul principale
+    # TENTATIVO 2 (Fallback Intelligente): Aspetta 2 secondi e riprova sul principale
     if not response or response.status_code != 200:
         time.sleep(2)
         response = call_gemini_api("gemini-2.5-flash", prompt_completo)
         
-    # TENTATIVO 3: Modello di riserva stabile v1 accettato universalmente
+    # TENTATIVO 3 (Fallback estremo): Modello Pro ufficiale accettato su v1
     if not response or response.status_code != 200:
         response = call_gemini_api("gemini-1.5-pro", prompt_completo)
 
@@ -119,4 +119,50 @@ def ask_gemini(user_message, text_results):
         data = response.json()
         return data['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
-        return f"Errore decod
+        return f"Errore decodifica testo IA Google: {str(e)}"
+
+def send_telegram(chat_id, text):
+    try:
+        requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
+    except:
+        pass
+
+@app.route("/webhook_biblioteca", methods=["POST"])
+def telegram_webhook():
+    try:
+        data = request.get_json()
+        if not data or "message" not in data:
+            return "OK", 200
+            
+        message = data["message"]
+        chat_id = message.get("chat", {}).get("id")
+        text = message.get("text", "").strip()
+        
+        if not chat_id or not text:
+            return "OK", 200
+            
+        if text == "/start":
+            send_telegram(chat_id, "Ciao! Sono l'assistente della Biblioteca Belvedere 📚 Scrivimi il titolo di un libro o un autore per cercarlo nel catalogo.")
+            return "OK", 200
+            
+        results = search_text_catalog(text)
+        reply = ask_gemini(text, results)
+        send_telegram(chat_id, reply)
+    except Exception as general_error:
+        if 'chat_id' in locals():
+            send_telegram(chat_id, f"Errore imprevisto: {str(general_error)}")
+    return "OK", 200
+
+@app.route("/setup", methods=["GET"])
+def setup():
+    render_url = request.host_url.rstrip("/")
+    resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
+    return jsonify(resp.json())
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Assistente Biblioteca Pronto.", 200
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
