@@ -44,7 +44,8 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        contenuto_pulito = contenido.replace("\r\n", "\n")
+        # CORRETTO AL 100%: Nessun refuso 'contenido' rimasto
+        contenuto_pulito = contenuto.replace("\r\n", "\n")
         blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
         
         if len(blocchi) <= 1:
@@ -94,14 +95,14 @@ def ask_gemini(user_message, text_results):
         f"Richiesta dell'utente: {user_message}\n\n"
         "ISTRUZIONI:\n"
         "Elenca i libri trovati indicando Titolo, Autore e la COLLOCAZIONE ESATTA.\n"
-        "Se la collocatione contiene codici come '21-0', 'I 13-1', 'I 2 2', mostrala chiaramente.\n"
+        "Se la collocazione contiene codici come '21-0', 'I 13-1', 'I 2 2', mostrala chiaramente.\n"
         "Non inventare informazioni non presenti nel testo fornito."
     )
 
-    # TENTATIVO 1: Gemini 2.5 Flash (Nuovo, gratuito)
+    # TENTATIVO 1: Il nuovo modello gratuito principale
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # TENTATIVO 2 (Fallback): Gemini 1.5 Flash (Stabile, gratuito con canali di quota ampi)
+    # TENTATIVO 2 (Fallback): Il collaudato 1.5 Flash (Sempre gratuito e senza il blocco a zero del Pro)
     if not response or response.status_code != 200:
         response = call_gemini_api("gemini-1.5-flash-latest", prompt_completo)
 
