@@ -35,7 +35,7 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-def search_text_catalog(query, max_results=12):
+def search_text_catalog(query, max_results=10):
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -106,26 +106,27 @@ def ask_gemini(user_message, text_results):
         "NOTA: Il file del catalogo fornito contiene ESCLUSIVAMENTE i libri della Biblioteca Belvedere.\n\n"
         f"Dati del catalogo estratti:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
-        "ISTRUZIONI:\n"
+        "ISTRUZIONI RIGIDE DI FORMATTAZIONE:\n"
         "1. Elenca i libri pertinenti trovati indicandoli chiaramente.\n"
         "2. Per ogni libro indica: Titolo, Autore e la Collocazione.\n"
-        "3. Usa un elenco puntato pulito ed elegante."
+        "3. Usa un elenco puntato pulito ed elegante.\n"
+        "4. AL TERMINE DELL'ELENCO inserisci SEMPRE un avviso testuale ben visibile (es. come nota o postfazione) che spieghi all'utente che "
+        "la risposta fornisce al massimo 10 titoli tra i più rilevanti, ma che in biblioteca potrebbero essercene altri, invitandolo quindi a chiedere direttamente al bibliotecario per una ricerca completa."
     )
 
-    # TENTATIVO 1: Modello principale veloce
+    # Tentativo 1 con il modello principale
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # Se fallisce per Rate Limit (limite di richieste ravvicinate), aspettiamo e riproviamo
     if not response or response.status_code != 200:
-        time.sleep(3) # Pausa di 3 secondi per far respirare la chiave API gratuita
+        time.sleep(3)
         response = call_gemini_api("gemini-2.5-flash", prompt_completo)
         
-    # TENTATIVO 2: Se è ancora bloccato, cambiamo modello passando al super stabile 1.5-flash
+    # Tentativo 2: Passa al modello di riserva 1.5-flash se il 2.5 è saturo
     if not response or response.status_code != 200:
         time.sleep(2)
         response = call_gemini_api("gemini-1.5-flash", prompt_completo)
         
-    # TENTATIVO 3: Ultima spiaggia con il modello Pro
+    # Tentativo 3: Ultima risorsa Pro
     if not response or response.status_code != 200:
         response = call_gemini_api("gemini-1.5-pro", prompt_completo)
 
