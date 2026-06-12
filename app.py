@@ -22,11 +22,14 @@ STOPWORDS = {
     'fare','dire','cerca','cerco','vorrei','voglio','cercare','trovare','libro',
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
-    'mi','dai','dacci','dimmi','trovami','cercami','sono','libri'
+    'mi','dai','dacci','dimmi','trovami','cercami','sono'
 }
 
 def normalize(s):
     s = str(s).lower().strip()
+    # Rimuove i simboli di punteggiatura per evitare che "eco?" fallisca la ricerca
+    for c in ['?', '!', ',', '.', ';', ':', '-', '_']:
+        s = s.replace(c, ' ')
     s = s.replace('č', 'c').replace('š', 's').replace('ś', 's').replace('ā', 'a')
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
@@ -45,7 +48,6 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             testo_catalogo = f.read()
         
-        # VARIABILE PULITA: Usa 'testo_catalogo' al 100%
         catalogo_pulito = testo_catalogo.replace("\r\n", "\n")
         blocchi = [b.strip() for b in catalogo_pulito.split("\n\n") if b.strip()]
         
@@ -83,7 +85,7 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, text_results):
     if not text_results:
-        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa ricerca tematica."
+        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa ricerca."
         
     if "ERRORE" in text_results[0]:
         return text_results[0]
@@ -95,7 +97,7 @@ def ask_gemini(user_message, text_results):
         f"Dati del catalogo estratti:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
         "ISTRUZIONI:\n"
-        "Elenca i libri trouvanti indicando Titolo, Autore e la COLLOCAZIONE ESATTA.\n"
+        "Elenca i libri trovati indicando Titolo, Autore e la COLLOCAZIONE ESATTA.\n"
         "Se la collocazione contiene codici come '21-0', 'I 13-1', 'I 2 2', mostrala chiaramente.\n"
         "Non inventare informazioni non presenti nel testo fornito."
     )
