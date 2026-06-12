@@ -35,7 +35,7 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-def search_text_catalog(query, max_results=10):
+def search_text_catalog(query, max_results=6): # Ridotto a 6 per massima stabilità
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -66,12 +66,13 @@ def search_text_catalog(query, max_results=10):
             
             if "cucin" in q or "ricett" in q or "mangiar" in q:
                 if "cucin" in blocco_n or "ricett" in blocco_n or "gastronom" in blocco_n or "artusi" in blocco_n:
-                    matched_blocks.append((blocco, 2))
+                    # Prendiamo solo l'inizio del blocco per evitare il sovraccarico di testo inutile
+                    matched_blocks.append((blocco[:300], 2))
                     continue
 
             score = sum(1 for term in terms if term in blocco_n)
             if score > 0:
-                matched_blocks.append((blocco, score))
+                matched_blocks.append((blocco[:300], score))
                     
         matched_blocks.sort(key=lambda x: -x[1])
         return [b[0] for b in matched_blocks[:max_results]]
@@ -106,12 +107,11 @@ def ask_gemini(user_message, text_results):
         "NOTA: Il file del catalogo fornito contiene ESCLUSIVAMENTE i libri della Biblioteca Belvedere.\n\n"
         f"Dati del catalogo estratti:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
-        "ISTRUZIONI RIGIDE DI FORMATTAZIONE:\n"
+        "ISTRUZIONI:\n"
         "1. Elenca i libri pertinenti trovati indicandoli chiaramente.\n"
         "2. Per ogni libro indica: Titolo, Autore e la Collocazione.\n"
         "3. Usa un elenco puntato pulito ed elegante.\n"
-        "4. AL TERMINE DELL'ELENCO inserisci SEMPRE un avviso testuale ben visibile (es. come nota o postfazione) che spieghi all'utente che "
-        "la risposta fornisce al massimo 10 titoli tra i più rilevanti, ma che in biblioteca potrebbero essercene altri, invitandolo quindi a chiedere direttamente al bibliotecario per una ricerca completa."
+        "4. AL TERMINE DELL'ELENCO inserisci SEMPRE questo avviso: 'Nota: La risposta fornisce una selezione dei titoli più rilevanti. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere direttamente al bibliotecario per una ricerca completa.'"
     )
 
     # Tentativo 1 con il modello principale
@@ -121,12 +121,12 @@ def ask_gemini(user_message, text_results):
         time.sleep(3)
         response = call_gemini_api("gemini-2.5-flash", prompt_completo)
         
-    # Tentativo 2: Passa al modello di riserva 1.5-flash se il 2.5 è saturo
+    # Tentativo 2: Modello 1.5-flash
     if not response or response.status_code != 200:
         time.sleep(2)
         response = call_gemini_api("gemini-1.5-flash", prompt_completo)
         
-    # Tentativo 3: Ultima risorsa Pro
+    # Tentativo 3: Modello Pro
     if not response or response.status_code != 200:
         response = call_gemini_api("gemini-1.5-pro", prompt_completo)
 
