@@ -94,23 +94,23 @@ def ask_gemini(user_message, text_results):
         f"Richiesta dell'utente: {user_message}\n\n"
         "ISTRUZIONI:\n"
         "Elenca i libri trovati indicando Titolo, Autore e la COLLOCAZIONE ESATTA.\n"
-        "Se la collocazione contiene codici come '21-0', 'I 13-1', 'I 2 2', mostrala chiaramente.\n"
+        "Se la collocazione contains codici come '21-0', 'I 13-1', 'I 2 2', mostrala chiaramente.\n"
         "Non inventare informazioni non presenti nel testo fornito."
     )
 
-    # TENTATIVO 1: Modello principale veloce
+    # TENTATIVO 1: Il modello di punta attuale su v1
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # TENTATIVO 2 (Fallback): Se dà errore (tipo 503), proviamo la versione Pro
+    # TENTATIVO 2 (Fallback): Modello 1.5 Flash aggiornato per l'endpoint v1
+    if not response or response.status_code != 200:
+        response = call_gemini_api("gemini-1.5-flash-latest", prompt_completo)
+        
+    # TENTATIVO 3 (Fallback estremo): La versione potente Pro
     if not response or response.status_code != 200:
         response = call_gemini_api("gemini-2.5-pro", prompt_completo)
-        
-    # TENTATIVO 3 (Fallback estremo): Proviamo la versione stabile precedente
-    if not response or response.status_code != 200:
-        response = call_gemini_api("gemini-1.5-flash", prompt_completo)
 
     if not response or response.status_code != 200:
-        status_code = response.status_code if response else "Timeout/No response"
+        status_code = response.status_code if response else "Timeout"
         try:
             errore_esteso = response.json().get("error", {}).get("message", "Nessun dettaglio")
         except:
