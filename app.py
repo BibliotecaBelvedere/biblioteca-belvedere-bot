@@ -66,6 +66,19 @@ def search_text_catalog(query, max_results=3):
     except Exception as e:
         return [f"ERRORE LETTURA: {str(e)}"]
 
+def call_gemini_api(model_name, prompt_text):
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={"contents": [{"parts": [{"text": prompt_text}]}]},
+            timeout=12
+        )
+        return response
+    except:
+        return None
+
 def ask_gemini(user_message, text_results):
     if not text_results:
         return "Mi dispiace, questo volume non risulta nel catalogo della nostra sede."
@@ -85,27 +98,30 @@ def ask_gemini(user_message, text_results):
         "Non inventare informazioni non presenti nel testo fornito."
     )
 
-    try:
-        # URL AGGIORNATO: Usiamo la versione stabile v1 e il modello di punta Gemini 2.5 Flash
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        response = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": prompt_completo}]}]},
-            timeout=12
-        )
+    # TENTATIVO 1: Modello principale veloce
+    response = call_gemini_api("gemini-2.5-flash", prompt_completo)
+    
+    # TENTATIVO 2 (Fallback): Se dà errore (tipo 503), proviamo la versione Pro
+    if not response or response.status_code != 200:
+        response = call_gemini_api("gemini-2.5-pro", prompt_completo)
         
-        if response.status_code != 200:
-            try:
-                errore_esteso = response.json().get("error", {}).get("message", "Dettaglio non disponibile")
-            except:
-                errore_esteso = response.text[:200]
-            return f"Errore di risposta da Gemini (Stato {response.status_code}) - Dettaglio Google: {errore_esteso}"
+    # TENTATIVO 3 (Fallback estremo): Proviamo la versione stabile precedente
+    if not response or response.status_code != 200:
+        response = call_gemini_api("gemini-1.5-flash", prompt_completo)
+
+    if not response or response.status_code != 200:
+        status_code = response.status_code if response else "Timeout/No response"
+        try:
+            errore_esteso = response.json().get("error", {}).get("message", "Nessun dettaglio")
+        except:
+            errore_esteso = response.text[:200] if response else "Errore di connessione"
+        return f"I server IA sono temporaneamente occupati (Stato {status_code}). Dettaglio: {errore_esteso}. Per favore riprova tra qualche istante."
             
+    try:
         data = response.json()
         return data['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
-        return f"Errore connessione IA Google: {str(e)}"
+        return f"Errore decodifica testo IA Google: {str(e)}"
 
 def send_telegram(chat_id, text):
     try:
