@@ -3,6 +3,7 @@ import time
 import requests
 import unicodedata
 from flask import Flask, request, jsonify
+from threading import Thread
 
 app = Flask(__name__)
 
@@ -22,7 +23,7 @@ STOPWORDS = {
     'fare','dire','cerca','cerco','vorrei','voglio','cercare','trovare','libro',
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
-    'mi','dai','dacci','dimmi','trovami','cercami','sono'
+    'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','sono','adatti','alle'
 }
 
 def normalize(s):
@@ -33,8 +34,7 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-# MODIFICATO: max_results alzato a 15 per catturare tutte le opere dell'autore
-def search_text_catalog(query, max_results=15):
+def search_text_catalog(query, max_results=10):
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -53,10 +53,11 @@ def search_text_catalog(query, max_results=15):
         
         if len(blocchi) <= 1:
             righe = [r.strip() for r in catalogo_pulito.split("\n") if r.strip()]
-            blocchi = []
+            blocks = []
             for i in range(0, len(righe), 4):
                 gruppo = "\n".join(righe[i:i+6])
-                blocchi.append(gruppo)
+                blocks.append(gruppo)
+            blocchi = blocks
                 
         matched_blocks = []
         for blocco in blocchi:
@@ -77,7 +78,7 @@ def call_gemini_api(model_name, prompt_text):
             url,
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": prompt_text}]}]},
-            timeout=15
+            timeout=30
         )
         return response
     except:
@@ -85,24 +86,23 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, text_results):
     if not text_results:
-        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa ricerca."
+        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa specifica richiesta."
         
     if "ERRORE" in text_results[0]:
         return text_results[0]
 
     context = "\n\n---\n\n".join(text_results)
     
-    # PROMPT OTTIMIZZATO: Forza l'attenzione solo su "Biblioteca Belvedere"
     prompt_completo = (
         "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale, formale e conciso.\n\n"
-        f"Dati del catalogo estratti (contengono varie biblioteche):\n{context}\n\n"
+        f"Dati del catalogo estratti:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
         "ISTRUZIONI RIGIDE:\n"
-        "1. Trova ed elenca TUTTI i libri che corrispondono alla richiesta, ma mostra SOLO quelli che hanno una collocazione sotto la voce 'Biblioteca Belvedere'.\n"
-        "2. Ignora i dati delle altre biblioteche (Augusta, Siracusa, Cassibile, ecc.).\n"
-        "3. Per ogni libro trovato a Belvedere, indica chiaramente: Titolo, Autore e la COLLOCAZIONE di Belvedere (es. 1-3, I 1-3).\n"
-        "4. Se l'autore ha molti libri a Belvedere, elencali tutti in un elenco puntato chiaro.\n"
-        "5. Non inventare informazioni."
+        "1. Trova ed elenca i libri che corrispondono o si avvicinano alla richiesta, mostrando SOLO quelli che hanno una collocazione sotto la voce 'Biblioteca Belvedere'.\n"
+        "2. Ignora i dati delle altre biblioteche provinciali.\n"
+        "3. Se trovi volumi pertinenti a Belvedere, indica: Titolo, Autore e Collocazione.\n"
+        "4. Se l'autore ha molti libri a Belvedere, elencali tutti chiaramente.\n"
+        "5. Se nessun libro estratto a Belvedere si adatta alla richiesta, spiegatelo cortesemente senza inventare titoli."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
@@ -129,6 +129,12 @@ def send_telegram(chat_id, text):
     except:
         pass
 
+# NUOVA FUNZIONE: Elabora la richiesta in background senza bloccare Telegram
+def async_process_request(chat_id, text):
+    results = search_text_catalog(text)
+    reply = ask_gemini(text, results)
+    send_telegram(chat_id, reply)
+
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
     try:
@@ -147,13 +153,15 @@ def telegram_webhook():
             send_telegram(chat_id, "Ciao! Sono l'assistente della Biblioteca Belvedere 📚 Scrivimi il titolo di un libro o un autore per cercarlo nel catalogo.")
             return "OK", 200
             
-        results = search_text_catalog(text)
-        reply = ask_gemini(text, results)
-        send_telegram(chat_id, reply)
+        # AZIONE ASINCRONA: Lanciamo il thread e rispondiamo subito a Telegram con 200 OK
+        thread = Thread(target=async_process_request, args=(chat_id, text))
+        thread.start()
+        
     except Exception as general_error:
         if 'chat_id' in locals():
             send_telegram(chat_id, f"Errore imprevisto: {str(general_error)}")
-    return "OK", 200
+            
+    return "OK", 200 # Telegram riceve questo entro millisecondi e non disturba più
 
 @app.route("/setup", methods=["GET"])
 def setup():
