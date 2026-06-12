@@ -44,7 +44,8 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        contenuto_pulito = contenido.replace("\r\n", "\n")
+        # VERIFICATO: Tutte le variabili ora usano correttamente la 'u' in italiano
+        contenuto_pulito = contenuto.replace("\r\n", "\n")
         blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
         
         if len(blocchi) <= 1:
@@ -86,7 +87,6 @@ def ask_gemini(user_message, text_results):
     )
 
     try:
-        # URL AGGIORNATO: Utilizza la versione stabile e corretta v1 dell'API di Google
         url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(
             url,
