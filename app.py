@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import unicodedata
 from flask import Flask, request, jsonify
@@ -44,7 +45,7 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        contenuto_pulito = contenuto.replace("\r\n", "\n")
+        contenuto_pulito = contenido.replace("\r\n", "\n")
         blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
         
         if len(blocchi) <= 1:
@@ -89,7 +90,7 @@ def ask_gemini(user_message, text_results):
     context = "\n\n---\n\n".join(text_results)
     
     prompt_completo = (
-        "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale, formale e conciso.\n\n"
+        "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale, formale and conciso.\n\n"
         f"Dati del catalogo estratti:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
         "ISTRUZIONI:\n"
@@ -101,13 +102,14 @@ def ask_gemini(user_message, text_results):
     # TENTATIVO 1: Canale principale veloce
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # TENTATIVO 2 (Fallback): Modello Pro aggiornato su v1
+    # TENTATIVO 2 (Fallback Intelligente): Se va in timeout, aspetta 2 secondi e riprova sul principale
     if not response or response.status_code != 200:
-        response = call_gemini_api("gemini-2.5-pro", prompt_completo)
+        time.sleep(2)
+        response = call_gemini_api("gemini-2.5-flash", prompt_completo)
         
-    # TENTATIVO 3 (Fallback estremo): Versione Flash ultraleggera 8B
+    # TENTATIVO 3 (Fallback estremo): Modello 1.5 Pro ufficiale (accettato universalmente su v1)
     if not response or response.status_code != 200:
-        response = call_gemini_api("gemini-2.5-flash-8b", prompt_completo)
+        response = call_gemini_api("gemini-1.5-pro", prompt_completo)
 
     if not response or response.status_code != 200:
         status_code = response.status_code if response else "Timeout"
@@ -115,7 +117,7 @@ def ask_gemini(user_message, text_results):
             errore_esteso = response.json().get("error", {}).get("message", "Nessun dettaglio")
         except:
             errore_esteso = response.text[:200] if response else "Errore di connessione"
-        return f"I server IA sono temporaneamente occupati (Stato {status_code}). Dettaglio: {errore_esteso}. Per favore riprova tra qualche istante."
+        return f"I server della biblioteca sono momentaneamente carichi. Per favore, prova a ripetere la richiesta tra un istante."
             
     try:
         data = response.json()
