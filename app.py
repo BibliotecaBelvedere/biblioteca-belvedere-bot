@@ -44,7 +44,8 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        contenuto_pulito = contenido.replace("\r\n", "\n")
+        # VERIFICATO: contenuto_pulito usa contenuto (con la 'u')
+        contenuto_pulito = contenuto.replace("\r\n", "\n")
         blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
         
         if len(blocchi) <= 1:
@@ -81,7 +82,7 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, text_results):
     if not text_results:
-        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa ricerca tematica."
+        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa ricerca."
         
     if "ERRORE" in text_results[0]:
         return text_results[0]
@@ -98,10 +99,10 @@ def ask_gemini(user_message, text_results):
         "Non inventare informazioni non presenti nel testo fornito."
     )
 
-    # TENTATIVO 1: Modello principale
+    # TENTATIVO 1: Canale principale su Gemini 2.5 Flash
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # TENTATIVO 2 (Fallback): Corretto in gemini-1.5-flash puro per l'endpoint v1
+    # TENTATIVO 2: Ruota di scorta su Gemini 1.5 Flash puro (senza -latest)
     if not response or response.status_code != 200:
         response = call_gemini_api("gemini-1.5-flash", prompt_completo)
 
