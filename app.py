@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
@@ -44,11 +44,11 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        contenuto_pulito = contenuto.replace("\r\n", "\n")
+        contenuto_pulito = contenido.replace("\r\n", "\n")
         blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
         
         if len(blocchi) <= 1:
-            righe = [r.strip() for r in contenuto_pulito.split("\n") if r.strip()]
+            righe = [r.strip() for r in contenido_pulito.split("\n") if r.strip()]
             blocchi = []
             for i in range(0, len(righe), 4):
                 gruppo = "\n".join(righe[i:i+6])
@@ -66,7 +66,7 @@ def search_text_catalog(query, max_results=3):
     except Exception as e:
         return [f"ERRORE LETTURA: {str(e)}"]
 
-def ask_claude(user_message, text_results):
+def ask_gemini(user_message, text_results):
     if not text_results:
         return "Mi dispiace, questo volume non risulta nel catalogo della nostra sede."
         
@@ -74,9 +74,11 @@ def ask_claude(user_message, text_results):
         return text_results[0]
 
     context = "\n\n---\n\n".join(text_results)
-    system_prompt = (
+    
+    prompt_completo = (
         "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale, formale e conciso.\n\n"
         f"Dati del catalogo estratti:\n{context}\n\n"
+        f"Richiesta dell'utente: {user_message}\n\n"
         "ISTRUZIONI:\n"
         "Elenca i libri trovati indicando Titolo, Autore e la COLLOCAZIONE ESATTA.\n"
         "Se la collocazione contiene codici come '21-0', 'I 13-1', 'I 2 2', mostrala chiaramente.\n"
@@ -84,27 +86,20 @@ def ask_claude(user_message, text_results):
     )
 
     try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                # Modello Haiku: compatibile al 100% con account gratuiti, Tier 0 e nuove chiavi
-                "model": "claude-3-haiku-20240307",
-                "max_tokens": 400,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_message}],
-            },
-            timeout=12,
+            url,
+            headers={"Content-Type": "application/json"},
+            json={"contents": [{"parts": [{"text": prompt_completo}]}]},
+            timeout=12
         )
         if response.status_code != 200:
-            return f"Errore di risposta da Claude (Stato {response.status_code})"
-        return "".join(c.get("text", "") for c in response.json().get("content", []))
+            return f"Errore di risposta da Gemini (Stato {response.status_code})"
+            
+        data = response.json()
+        return data['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
-        return f"Errore connessione IA: {str(e)}"
+        return f"Errore connessione IA Google: {str(e)}"
 
 def send_telegram(chat_id, text):
     try:
@@ -131,7 +126,7 @@ def telegram_webhook():
             return "OK", 200
             
         results = search_text_catalog(text)
-        reply = ask_claude(text, results)
+        reply = ask_gemini(text, results)
         send_telegram(chat_id, reply)
     except Exception as general_error:
         if 'chat_id' in locals():
