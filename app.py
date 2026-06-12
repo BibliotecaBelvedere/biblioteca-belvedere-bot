@@ -34,28 +34,37 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-# NUOVA FUNZIONE: Estrae solo le righe essenziali di Belvedere riducendo il testo del 90%
 def sfoltisci_blocco_belvedere(blocco_grezzo):
     righe = blocco_grezzo.split('\n')
     righe_utili = []
     
-    # Conserviamo sempre le prime 4 righe (solitamente Titolo, Autore, Edizione)
-    for i in range(min(4, len(righe))):
+    # Conserviamo le prime 6 righe per includere titoli lunghi o note di edizione
+    for i in range(min(6, len(righe))):
         if righe[i].strip():
             righe_utili.append(righe[i].strip())
             
-    # Cerchiamo se c'è specificamente la Biblioteca Belvedere nel resto del blocco
+    # Esaminiamo TUTTE le righe del blocco alla ricerca di Belvedere e della sua collocazione (la riga successiva)
     trovato_belvedere = False
-    for riga in righe:
+    for idx, riga in enumerate(righe):
         if "belvedere" in riga.lower():
             righe_utili.append(riga.strip())
+            # Se la riga dopo contiene la collocazione, prendiamo anche quella
+            if idx + 1 < len(righe) and righe[idx+1].strip():
+                righe_utili.append(righe[idx+1].strip())
             trovato_belvedere = True
             
     if trovato_belvedere:
-        return "\n".join(righe_utili)
-    return "" # Se il blocco non contiene Belvedere, lo scartiamo del tutto a monte!
+        # Rimuove i duplicati mantenendo l'ordine
+        viste = set()
+        ritorno = []
+        for r in righe_utili:
+            if r not in viste:
+                viste.add(r)
+                ritorno.append(r)
+        return "\n".join(ritorno)
+    return ""
 
-def search_text_catalog(query, max_results=15):
+def search_text_catalog(query, max_results=20): # Alzato a 20 per query ampie come "cucina" o "storia"
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -83,9 +92,16 @@ def search_text_catalog(query, max_results=15):
         matched_blocks = []
         for blocco in blocchi:
             blocco_n = normalize(blocco)
+            # Supporta sinonimi base per la cucina espandendo la ricerca a monte
+            if "cucina" in q or "ricette" in q:
+                if "cucin" in blocco_n or "ricett" in blocco_n or "gastronom" in blocco_n:
+                    blocco_pulito = sfoltisci_blocco_belvedere(blocco)
+                    if blocco_pulito:
+                        matched_blocks.append((blocco_pulito, 2))
+                    continue
+
             score = sum(1 for term in terms if term in blocco_n)
             if score > 0:
-                # Sfoltiamo immediatamente il blocco tenendo solo i dati di Belvedere
                 blocco_pulito = sfoltisci_blocco_belvedere(blocco)
                 if blocco_pulito:
                     matched_blocks.append((blocco_pulito, score))
@@ -123,8 +139,8 @@ def ask_gemini(user_message, text_results):
         f"Richiesta dell'utente: {user_message}\n\n"
         "ISTRUZIONI:\n"
         "1. Elenca i libri trovati indicando chiaramente: Titolo, Autore e la COLLOCAZIONE di Belvedere.\n"
-        "2. Se l'utente ha chiesto un tema generale (es. cucina), elenca i ricettari o testi pertinenti estratti dal testo.\n"
-        "3. Mantieni lo stile formale ed evita preamboli inutili."
+        "2. Se l'utente ha chiesto un tema generale, elenca i testi pertinenti estratti dal testo.\n"
+        "3. Sii sintetico e mantieni la formattazione pulita con elenchi puntati."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
