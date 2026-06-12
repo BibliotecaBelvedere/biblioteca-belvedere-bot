@@ -35,7 +35,12 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-def search_text_catalog(query, max_results=6): # Ridotto a 6 per massima stabilità
+# FUNZIONE DI SUPPORTO: Prende solo le prime 5 righe essenziali di un blocco per non corrompere il testo
+def sfoltisci_linee_blocco(testo_blocco):
+    righe = [r.strip() for r in testo_blocco.split('\n') if r.strip()]
+    return "\n".join(righe[:5])
+
+def search_text_catalog(query, max_results=8):
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -64,15 +69,23 @@ def search_text_catalog(query, max_results=6): # Ridotto a 6 per massima stabili
         for blocco in blocchi:
             blocco_n = normalize(blocco)
             
+            is_match = False
+            score = 0
+            
             if "cucin" in q or "ricett" in q or "mangiar" in q:
                 if "cucin" in blocco_n or "ricett" in blocco_n or "gastronom" in blocco_n or "artusi" in blocco_n:
-                    # Prendiamo solo l'inizio del blocco per evitare il sovraccarico di testo inutile
-                    matched_blocks.append((blocco[:300], 2))
-                    continue
-
-            score = sum(1 for term in terms if term in blocco_n)
-            if score > 0:
-                matched_blocks.append((blocco[:300], score))
+                    is_match = True
+                    score = 5
+            else:
+                score = sum(1 for term in terms if term in blocco_n)
+                if score > 0:
+                    is_match = True
+                    
+            if is_match:
+                # Sfoltiamo il blocco riga per riga in modo pulito ed elegante
+                blocco_pulito = sfoltisci_linee_blocco(blocco)
+                if blocco_pulito:
+                    matched_blocks.append((blocco_pulito, score))
                     
         matched_blocks.sort(key=lambda x: -x[1])
         return [b[0] for b in matched_blocks[:max_results]]
