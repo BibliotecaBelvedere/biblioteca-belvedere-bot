@@ -44,7 +44,6 @@ def search_text_catalog(query, max_results=3):
         with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
             contenuto = f.read()
         
-        # CORRETTO: Adesso usa la variabile 'contenuto' corretta
         contenuto_pulito = contenuto.replace("\r\n", "\n")
         blocchi = [b.strip() for b in contenuto_pulito.split("\n\n") if b.strip()]
         
@@ -93,7 +92,8 @@ def ask_claude(user_message, text_results):
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-3-5-sonnet-latest",
+                # Modello Haiku: compatibile al 100% con account gratuiti, Tier 0 e nuove chiavi
+                "model": "claude-3-haiku-20240307",
                 "max_tokens": 400,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_message}],
