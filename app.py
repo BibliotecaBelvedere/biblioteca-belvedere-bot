@@ -23,7 +23,8 @@ STOPWORDS = {
     'fare','dire','cerca','cerco','vorrei','voglio','cercare','trovare','libro',
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
-    'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','sono','adatti','alle'
+    'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','sono','adatti','alle',
+    'crechi','creca'
 }
 
 def normalize(s):
@@ -34,37 +35,7 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-def sfoltisci_blocco_belvedere(blocco_grezzo):
-    righe = blocco_grezzo.split('\n')
-    righe_utili = []
-    
-    # Conserviamo le prime 6 righe per includere titoli lunghi o note di edizione
-    for i in range(min(6, len(righe))):
-        if righe[i].strip():
-            righe_utili.append(righe[i].strip())
-            
-    # Esaminiamo TUTTE le righe del blocco alla ricerca di Belvedere e della sua collocazione (la riga successiva)
-    trovato_belvedere = False
-    for idx, riga in enumerate(righe):
-        if "belvedere" in riga.lower():
-            righe_utili.append(riga.strip())
-            # Se la riga dopo contiene la collocazione, prendiamo anche quella
-            if idx + 1 < len(righe) and righe[idx+1].strip():
-                righe_utili.append(righe[idx+1].strip())
-            trovato_belvedere = True
-            
-    if trovato_belvedere:
-        # Rimuove i duplicati mantenendo l'ordine
-        viste = set()
-        ritorno = []
-        for r in righe_utili:
-            if r not in viste:
-                viste.add(r)
-                ritorno.append(r)
-        return "\n".join(ritorno)
-    return ""
-
-def search_text_catalog(query, max_results=20): # Alzato a 20 per query ampie come "cucina" o "storia"
+def search_text_catalog(query, max_results=8):
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -92,19 +63,17 @@ def search_text_catalog(query, max_results=20): # Alzato a 20 per query ampie co
         matched_blocks = []
         for blocco in blocchi:
             blocco_n = normalize(blocco)
-            # Supporta sinonimi base per la cucina espandendo la ricerca a monte
-            if "cucina" in q or "ricette" in q:
-                if "cucin" in blocco_n or "ricett" in blocco_n or "gastronom" in blocco_n:
-                    blocco_pulito = sfoltisci_blocco_belvedere(blocco)
-                    if blocco_pulito:
-                        matched_blocks.append((blocco_pulito, 2))
+            
+            # Gestione facilitata e flessibile per la cucina e sinonimi
+            if "cucin" in q or "ricett" in q or "mangiar" in q:
+                if "cucin" in blocco_n or "ricett" in blocco_n or "gastronom" in blocco_n or "artusi" in blocco_n:
+                    matched_blocks.append((blocco, 2))
                     continue
 
+            # Ricerca standard per le altre parole chiave (es. sentimenti)
             score = sum(1 for term in terms if term in blocco_n)
             if score > 0:
-                blocco_pulito = sfoltisci_blocco_belvedere(blocco)
-                if blocco_pulito:
-                    matched_blocks.append((blocco_pulito, score))
+                matched_blocks.append((blocco, score))
                     
         matched_blocks.sort(key=lambda x: -x[1])
         return [b[0] for b in matched_blocks[:max_results]]
@@ -126,7 +95,7 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, text_results):
     if not text_results:
-        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta presso la sede di Belvedere."
+        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa richiesta tematica."
         
     if "ERRORE" in text_results[0]:
         return text_results[0]
@@ -135,12 +104,13 @@ def ask_gemini(user_message, text_results):
     
     prompt_completo = (
         "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale, formale e conciso.\n\n"
-        f"Dati del catalogo filtrati per la sede di Belvedere:\n{context}\n\n"
+        f"Dati del catalogo estratti:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
-        "ISTRUZIONI:\n"
-        "1. Elenca i libri trovati indicando chiaramente: Titolo, Autore e la COLLOCAZIONE di Belvedere.\n"
-        "2. Se l'utente ha chiesto un tema generale, elenca i testi pertinenti estratti dal testo.\n"
-        "3. Sii sintetico e mantieni la formattazione pulita con elenchi puntati."
+        "ISTRUZIONI RIGIDE:\n"
+        "1. Trova ed elenca i libri che corrispondono alla richiesta dell'utente.\n"
+        "2. IMPORTANTE: Elenca SOLO i libri che sono disponibili presso la 'Biblioteca Belvedere' o che mostrano collocazioni compatibili con lo stile di Belvedere (es. codici come 1-3, I 1-3, 21-3, 32a-2, 18-4, ecc.). Se un libro riporta chiaramente SOLO altre biblioteche (es. Augusta, Floridia) e non Belvedere, ignoralo.\n"
+        "3. Per ogni libro valido, indica chiaramente: Titolo, Autore e Collocazione.\n"
+        "4. Sii sintetico e usa un elenco puntato pulito."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
