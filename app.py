@@ -34,7 +34,28 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-def search_text_catalog(query, max_results=10):
+# NUOVA FUNZIONE: Estrae solo le righe essenziali di Belvedere riducendo il testo del 90%
+def sfoltisci_blocco_belvedere(blocco_grezzo):
+    righe = blocco_grezzo.split('\n')
+    righe_utili = []
+    
+    # Conserviamo sempre le prime 4 righe (solitamente Titolo, Autore, Edizione)
+    for i in range(min(4, len(righe))):
+        if righe[i].strip():
+            righe_utili.append(righe[i].strip())
+            
+    # Cerchiamo se c'è specificamente la Biblioteca Belvedere nel resto del blocco
+    trovato_belvedere = False
+    for riga in righe:
+        if "belvedere" in riga.lower():
+            righe_utili.append(riga.strip())
+            trovato_belvedere = True
+            
+    if trovato_belvedere:
+        return "\n".join(righe_utili)
+    return "" # Se il blocco non contiene Belvedere, lo scartiamo del tutto a monte!
+
+def search_text_catalog(query, max_results=15):
     q = normalize(query)
     terms = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
@@ -64,7 +85,10 @@ def search_text_catalog(query, max_results=10):
             blocco_n = normalize(blocco)
             score = sum(1 for term in terms if term in blocco_n)
             if score > 0:
-                matched_blocks.append((blocco, score))
+                # Sfoltiamo immediatamente il blocco tenendo solo i dati di Belvedere
+                blocco_pulito = sfoltisci_blocco_belvedere(blocco)
+                if blocco_pulito:
+                    matched_blocks.append((blocco_pulito, score))
                     
         matched_blocks.sort(key=lambda x: -x[1])
         return [b[0] for b in matched_blocks[:max_results]]
@@ -78,7 +102,7 @@ def call_gemini_api(model_name, prompt_text):
             url,
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": prompt_text}]}]},
-            timeout=30
+            timeout=25
         )
         return response
     except:
@@ -86,7 +110,7 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, text_results):
     if not text_results:
-        return "Mi dispiace, nessun volume nel nostro catalogo sembra corrispondere a questa specifica richiesta."
+        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta presso la sede di Belvedere."
         
     if "ERRORE" in text_results[0]:
         return text_results[0]
@@ -95,14 +119,12 @@ def ask_gemini(user_message, text_results):
     
     prompt_completo = (
         "Sei l'assistente della Biblioteca Belvedere di Siracusa. Rispondi in modo cordiale, formale e conciso.\n\n"
-        f"Dati del catalogo estratti:\n{context}\n\n"
+        f"Dati del catalogo filtrati per la sede di Belvedere:\n{context}\n\n"
         f"Richiesta dell'utente: {user_message}\n\n"
-        "ISTRUZIONI RIGIDE:\n"
-        "1. Trova ed elenca i libri che corrispondono o si avvicinano alla richiesta, mostrando SOLO quelli che hanno una collocazione sotto la voce 'Biblioteca Belvedere'.\n"
-        "2. Ignora i dati delle altre biblioteche provinciali.\n"
-        "3. Se trovi volumi pertinenti a Belvedere, indica: Titolo, Autore e Collocazione.\n"
-        "4. Se l'autore ha molti libri a Belvedere, elencali tutti chiaramente.\n"
-        "5. Se nessun libro estratto a Belvedere si adatta alla richiesta, spiegatelo cortesemente senza inventare titoli."
+        "ISTRUZIONI:\n"
+        "1. Elenca i libri trovati indicando chiaramente: Titolo, Autore e la COLLOCAZIONE di Belvedere.\n"
+        "2. Se l'utente ha chiesto un tema generale (es. cucina), elenca i ricettari o testi pertinenti estratti dal testo.\n"
+        "3. Mantieni lo stile formale ed evita preamboli inutili."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
@@ -129,7 +151,6 @@ def send_telegram(chat_id, text):
     except:
         pass
 
-# NUOVA FUNZIONE: Elabora la richiesta in background senza bloccare Telegram
 def async_process_request(chat_id, text):
     results = search_text_catalog(text)
     reply = ask_gemini(text, results)
@@ -153,7 +174,6 @@ def telegram_webhook():
             send_telegram(chat_id, "Ciao! Sono l'assistente della Biblioteca Belvedere 📚 Scrivimi il titolo di un libro o un autore per cercarlo nel catalogo.")
             return "OK", 200
             
-        # AZIONE ASINCRONA: Lanciamo il thread e rispondiamo subito a Telegram con 200 OK
         thread = Thread(target=async_process_request, args=(chat_id, text))
         thread.start()
         
@@ -161,7 +181,7 @@ def telegram_webhook():
         if 'chat_id' in locals():
             send_telegram(chat_id, f"Errore imprevisto: {str(general_error)}")
             
-    return "OK", 200 # Telegram riceve questo entro millisecondi e non disturba più
+    return "OK", 200
 
 @app.route("/setup", methods=["GET"])
 def setup():
