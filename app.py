@@ -77,8 +77,7 @@ def cerca_nel_db(query):
         return []
         
     if any(x in q for x in ["cucin", "ricett", "mangiar", "gastronom"]):
-        parole.append("cucin")
-        parole.append("ricett")
+        parole = ["cucin", "ricett"]
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -103,7 +102,7 @@ def call_gemini_api(model_name, prompt_text):
             url,
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": prompt_text}]}]},
-            timeout=25
+            timeout=8  # Abbassato il timeout a 8 secondi per non far morire la chat di Telegram
         )
         return response
     except:
@@ -113,41 +112,47 @@ def ask_gemini(user_message, testi_libri):
     if not testi_libri:
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta."
     
-    # RISOLUZIONE CRASH: Abbassiamo a 12 libri massimi per evitare di intasare la memoria
     limite_libri = 12
     mostrati_subito = testi_libri[:limite_libri]
     piu_altri = len(testi_libri) > limite_libri
     
-    # PULIZIA RIGIDA: Di ogni blocco prendiamo SOLO le prime 3 righe (Titolo, Autore, Collocazione)
-    # Tagliamo via indici, capitoli e testi lunghi che fanno fallire la cucina!
     context_list = []
     for blocco in mostrati_subito:
         linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-        blocco_corto = "\n".join(linee[:3])
+        blocco_corto = " | ".join(linee[:3])
         context_list.append(blocco_corto)
         
-    context = "\n\n---\n\n".join(context_list)
+    context = "\n---\n".join(context_list)
     
     prompt_completo = (
-        "Sei l'assistente virtuale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
-        "Rispondi in modo cordiale, molto sintetico e schematico, evitando introduzioni discorsive lunghe.\n\n"
-        f"Dati dei libri:\n{context}\n\n"
-        f"Richiesta dell'utente: {user_message}\n\n"
-        "ISTRUZIONI DI FORMATTAZIONE RIGIDE:\n"
-        "1. Crea un elenco puntato semplice.\n"
-        "2. Per ogni libro scrivi SOLO: **Titolo**, Autore e Collocazione su un'unica riga o in modo molto compatto, senza sotto-punti elenco sparsi.\n"
-        "3. Evita di essere confusionario. Sii pulito ed elegante.\n"
-        "4. AL TERMINE dell'elenco aggiungi questo testo: 'Nota: Questa è una selezione dei titoli più rilevanti. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere al bibliotecario per una ricerca completa.'"
+        "Sei l'assistente della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
+        "Genera un elenco puntato semplice dei libri trovati.\n"
+        f"Dati:\n{context}\n\n"
+        "Per ogni libro scrivi su una sola riga: **Titolo**, Autore e Collocazione.\n"
+        "Al termine aggiungi la nota che invita a chiedere al bibliotecario."
     )
 
+    # Proviamo a chiamare Gemini
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
+    # PARACADUTE AUTOMATICO: Se Gemini fallisce o è lento, il Database risponde da solo!
     if not response or response.status_code != 200:
-        time.sleep(2)
-        response = call_gemini_api("gemini-1.5-flash", prompt_completo)
-
-    if not response or response.status_code != 200:
-        return "I server sono momentaneamente occupati. Prova a ripetere la richiesta tra un istante."
+        linee_emergenza = [
+            "📚 **Biblioteca Belvedere (SBS0CB) - Risultati del Catalogo**:\n",
+            "Ecco i volumi trovati direttamente nel nostro sistema:\n"
+        ]
+        for blocco in mostrati_subito:
+            linee = [l.strip() for l in blocco.split('\n') if l.strip()]
+            # Prendiamo il meglio che c'è nelle prime righe del database
+            info_libro = " - ".join(linee[:3])
+            linee_emergenza.append(f"• {info_libro}")
+            
+        linee_emergenza.append("\n_Nota: Questa è una selezione automatica dei titoli disponibili. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere al bibliotecario per una ricerca completa._")
+        
+        if piu_altri:
+            linee_emergenza.append(f"\n⚠️ *Nota*: Ci sono altri {len(testi_libri) - limite_libri} libri corrispondenti nel catalogo. Chiedi in sede per vederli tutti!")
+            
+        return "\n".join(linee_emergenza)
             
     try:
         data = response.json()
@@ -156,7 +161,8 @@ def ask_gemini(user_message, testi_libri):
             testo_ia += f"\n\n⚠️ *Nota*: Ci sono altri {len(testi_libri) - limite_libri} libri corrispondenti nel catalogo. Chiedi in sede per consultarli tutti!"
         return testo_ia
     except:
-        return "Si è verificato un errore nella lettura dei dati. Riprova."
+        # Se anche la decodifica fallisce, usiamo comunque i dati del database
+        return f"Trovati {len(testi_libri)} libri. Chiedi al bibliotecario la lista completa per cucina/autore."
 
 def send_telegram(chat_id, text):
     try:
