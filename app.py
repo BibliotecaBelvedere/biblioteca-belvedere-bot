@@ -171,28 +171,30 @@ def cerca_nel_db(query):
 
 def call_gemini_api(model_name, prompt_text):
     try:
-        url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        # Endpoint aggiornato e più tollerante per la serie Gemini 2.x
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         
-        # Struttura JSON corretta e standard per le API di Gemini
         payload = {
             "contents": [
                 {
                     "role": "user",
                     "parts": [{"text": prompt_text}]
                 }
-            ]
+            ],
+            "generationConfig": {
+                "temperature": 0.2  # Mantiene l'AI precisa e focalizzata sul filtro
+            }
         }
         
         response = requests.post(
             url,
             headers={"Content-Type": "application/json"},
             json=payload,
-            timeout=12  # Aumentato per evitare timeout su server gratuiti
+            timeout=12
         )
         return response
     except Exception as e:
         return None
-
 # LA VERA INNOVAZIONE: IL FILTRO INTELLIGENTE DI GEMINI
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
