@@ -42,42 +42,51 @@ def normalize(s):
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
 def inizializza_database():
-    if not os.path.exists(CATALOGO_FILE):
-        return "Errore: catalogo.txt assente."
+    # Controllo minuscole/maiuscole flessibile per Linux
+    file_reale = CATALOGO_FILE
+    if not os.path.exists(file_reale):
+        if os.path.exists("Catalogo.txt"):
+            file_reale = "Catalogo.txt"
+        else:
+            return "Errore: catalogo.txt assente nella cartella principale."
 
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS libri (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            testo_completo TEXT,
-            testo_normalizzato TEXT
-        )
-    ''')
-    cursor.execute("DELETE FROM libri")
-    
-    with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
-        contenuto = f.read().replace("\ufeff", "").replace("\r\n", "\n").replace("\u00a0", "\n")
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS libri (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                testo_completo TEXT,
+                testo_normalizzato TEXT
+            )
+        ''')
+        cursor.execute("DELETE FROM libri")
         
-    pezzi_raw = contenido.split("[nd]")
-    blocchi_effettivi = []
-    
-    for pezzo in pezzi_raw:
-        linee = [l.strip() for l in pezzo.split("\n") if l.strip()]
-        linee_pulite = [l for l in linee if "Ordinamento Soggetto" not in l and "Biblioteca:" not in l and "Data e ora:" not in l]
+        # CODIFICA CORAZZATA: utf-8-sig pulisce i file Windows automaticamente, errors="ignore" evita il crash 500
+        with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
+            contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
+            
+        pezzi_raw = contenuto.split("[nd]")
+        blocchi_effettivi = []
         
-        if linee_pulite:
-            testo_blocco = "\n".join(linee_pulite)
-            blocchi_effettivi.append(testo_blocco)
+        for pezzo in pezzi_raw:
+            linee = [l.strip() for l in pezzo.split("\n") if l.strip()]
+            linee_pulite = [l for l in linee if "Ordinamento Soggetto" not in l and "Biblioteca:" not in l and "Data e ora:" not in l]
+            
+            if linee_pulite:
+                testo_blocco = "\n".join(linee_pulite)
+                blocchi_effettivi.append(testo_blocco)
 
-    for blocco in blocchi_effettivi:
-        cursor.execute(
-            "INSERT INTO libri (testo_completo, testo_normalizzato) VALUES (?, ?)",
-            (blocco, normalize(blocco))
-        )
-    conn.commit()
-    conn.close()
-    return "Database ricostruito con successo!"
+        for blocco in blocchi_effettivi:
+            cursor.execute(
+                "INSERT INTO libri (testo_completo, testo_normalizzato) VALUES (?, ?)",
+                (blocco, normalize(blocco))
+            )
+        conn.commit()
+        conn.close()
+        return f"Database ricostruito con successo con {len(blocchi_effettivi)} libri!"
+    except Exception as e:
+        return f"Errore tecnico durante l'inizializzazione: {str(e)}"
 
 # MOTORE DI RICERCA IBRIDO (DB + FILTRO PYTHON)
 def cerca_nel_db(query):
@@ -93,7 +102,6 @@ def cerca_nel_db(query):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Cerchiamo nel DB i libri che contengono TUTTE le parole (usiamo AND con LIKE classico)
     condizioni = []
     parametri = []
     for parola in parole:
@@ -111,19 +119,16 @@ def cerca_nel_db(query):
     
     risultati_filtrati = []
     
-    # QUI AGISCE IL PARACADUTE PYTHON (Controlla che le parole corte siano isolate davvero)
     for testo_completo, testo_normalizzato in righe:
         valido = True
         for parola in parole:
             if len(parola) <= 3:
-                # Controlla se la parola è circondata da confini di parola (\b), impedendo falsi positivi
                 if not re.search(rf"\b{parola}\b", testo_normalizzato):
                     valido = False
                     break
         if valido:
             risultati_filtrati.append(testo_completo)
             
-    # Se con l'AND rigidissimo non esce nulla, facciamo un tentativo di emergenza con OR
     if not risultati_filtrati and len(condizioni) > 1:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -239,15 +244,20 @@ def telegram_webhook():
 @app.route("/setup", methods=["GET"])
 def setup():
     res = inizializza_database()
-    render_url = request.host_url.rstrip("/")
-    resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
-    return jsonify({"status": res, "telegram_response": resp.json()})
+    try:
+        render_url = request.host_url.rstrip("/")
+        resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
+        tele_res = resp.json()
+    except Exception as e:
+        tele_res = f"Errore connessione Telegram: {str(e)}"
+        
+    return jsonify({"status": res, "telegram_response": tele_res})
 
 @app.route("/", methods=["GET"])
 def home():
     return "Assistente Biblioteca Pronto.", 200
 
 if __name__ == "__main__":
-    inizializza_database()
+    # Rimosso il caricamento automatico all'avvio per evitare crash iniziali di Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
