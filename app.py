@@ -13,10 +13,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-CATALOGO_FILE = "catalogo.txt"
 DB_FILE = "catalogo.db"
 
-# STOPWORDS ultra-selettive
 STOPWORDS = {
     'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
     'nel','nella','nelle','negli','nei','sul','sulla','sulle','sugli','sui','per',
@@ -29,8 +27,15 @@ STOPWORDS = {
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
     'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','adatti','alle',
     'crechi','creca','su','di','da','a','in','qualcosa',
-    'mostrami','elenco','lista','autori','autore','volumi','volume','titoli','titolo',
-    'teatro','commedia','tragedia','dramma','romanzo','romanzi','saggio','saggi'
+    'mostrami','elenco','lista','autori','autore','volumi','volume','titoli','titolo'
+}
+
+# DIZIONARIO DELLE MACRO-AREE TEMATICHE (Espansione della ricerca)
+TEMI_ESPANSI = {
+    "cucin": ["cucin", "ricett", "gastronom", "diet", "piatt", "aliment", "mangiare"],
+    "teatr": ["teatr", "commedia", "tragedia", "dramma", "atto", "scena", "copione"],
+    "amor": ["amor", "passione", "sentimento", "innamor", "affetto"],
+    "bullis": ["bullis", "bullo", "cyberbulli", "violenza", "scuola", "ragazzi", "aggressione"]
 }
 
 def normalize(s):
@@ -42,9 +47,7 @@ def normalize(s):
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
 def inizializza_database():
-    # Ottieni la lista dei file sul server per fare debug visivo
     file_presenti = os.listdir(".")
-    
     file_reale = None
     for f_name in file_presenti:
         if f_name.lower() == "catalogo.txt":
@@ -52,7 +55,7 @@ def inizializza_database():
             break
             
     if not file_reale:
-        return f"ERRORE: Il file catalogo.txt NON esiste su Render! File trovati nella root: {file_presenti}"
+        return f"ERRORE: Il file catalogo.txt NON esiste su Render! File trovati: {file_presenti}"
 
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -66,7 +69,6 @@ def inizializza_database():
         ''')
         cursor.execute("DELETE FROM libri")
         
-        # Apertura ultra-sicura flessibile
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
@@ -92,50 +94,58 @@ def inizializza_database():
     except Exception as e:
         return f"ERRORE TECNICO durante la lettura/scrittura del file: {str(e)}"
 
-# MOTORE IBRIDO DI PRECISIONE PYTHON
+# MOTORE DI RICERCA INTELLIGENTE CON ESPANSIONE TEMATICA
 def cerca_nel_db(query):
     q = normalize(query)
-    parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
+    parole_chiave = [w for w in q.split() if len(w) >= 2 and w not in STOPWORDS]
     
-    if not parole:
+    if not parole_chiave:
         return []
-        
-    if any(x in q for x in ["cucin", "ricett", "mangiar", "gastronom"]):
-        parole = ["cucin", "ricett"]
+
+    # Controllo Espansione Tematica (Ricerca libera evoluta)
+    parole_finali = set()
+    ricerca_tematica_attiva = False
+    
+    for parola in parole_chiave:
+        trovato_tema = False
+        for radice, sinonimi in TEMI_ESPANSI.items():
+            if radice in parola:
+                parole_finali.update(sinonimi)
+                ricerca_tematica_attiva = True
+                trovato_tema = True
+                break
+        if not trovato_tema:
+            parole_finali.add(parola)
+
+    parole_finali = list(parole_finali)
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    condizioni = []
-    parametri = []
-    for parola in parole:
-        condizioni.append("testo_normalizzato LIKE ?")
-        parametri.append(f"%{parola}%")
+    if ricerca_tematica_attiva:
+        # Se l'utente cerca un TEMA (es. cucina), usiamo l'OR per catturare tutti i sinonimi correlati
+        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_finali]
+        parametri = [f"%{p}%" for p in parole_finali]
+        sql_query = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 15"
+    else:
+        # Se cerca un incrocio (es: Eco Pendolo), usiamo l'AND per stringere sui criteri precisi
+        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_finali]
+        parametri = [f"%{p}%" for p in parole_finali]
+        sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 15"
         
-    if not condizioni:
-        conn.close()
-        return []
-
-    # Cerchiamo i candidati grezzi che contengono i frammenti
-    sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)} LIMIT 100"
-    cursor.execute(sql_query, parametri)
+    cursor.execute(sql_query, list(parametri))
     righe = cursor.fetchall()
+    
+    # Paracadute: se l'AND rigoroso fallisce (magari per un refuso), prova in modalità più elastica
+    if not righe and not ricerca_tematica_attiva and len(parole_finali) > 1:
+        condizioni_or = ["testo_normalizzato LIKE ?" for _ in parole_finali]
+        parametri_or = [f"%{p}%" for p in parole_finali]
+        sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni_or)} LIMIT 10"
+        cursor.execute(sql_query_or, parametri_or)
+        righe = cursor.fetchall()
+        
     conn.close()
-    
-    risultati_filtrati = []
-    
-    # Controllo rigoroso sulle parole corte (evita che 'eco' matcha dentro 'recarsi')
-    for testo_completo, testo_normalizzato in righe:
-        valido = True
-        for parola in parole:
-            if len(parola) <= 3:
-                if not re.search(rf"\b{parola}\b", testo_normalizzato):
-                    valido = False
-                    break
-        if valido:
-            risultati_filtrati.append(testo_completo)
-            
-    return risultati_filtrati[:15]
+    return [row[0] for row in righe]
 
 def call_gemini_api(model_name, prompt_text):
     try:
@@ -167,12 +177,12 @@ def ask_gemini(user_message, testi_libri):
     
     prompt_completo = (
         "Sei l'assistente ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
-        "Genera un elenco puntato dei libri trovati.\n"
-        f"Dati del catalogo:\n{context}\n\n"
+        "Genera un elenco ordinato e pulito dei libri trovati forniti nel contesto.\n"
+        f"Dati estratti dal catalogo:\n{context}\n\n"
         "ISTRUZIONI RIGIDE:\n"
-        "1. Mostra SOLO i libri coerenti con l'autore o l'argomento cercato dall'utente.\n"
-        "2. Formato: **Titolo**, Autore e Collocazione su un'unica riga.\n"
-        "3. Chiudi sempre con un saluto istituzionale cordiale che invita a passare in sede."
+        "1. Filtra i dati mostrando solo i volumi inerenti alla richiesta dell'utente.\n"
+        "2. Formato output: **Titolo**, Autore ed eventualmente Collocazione su un'unica riga.\n"
+        "3. Concludi sempre con un saluto cordiale e l'invito a venire in biblioteca a Siracusa."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
@@ -224,7 +234,7 @@ def telegram_webhook():
             return "OK", 200
             
         if text == "/start":
-            send_telegram(chat_id, "Benvenuto nell'assistente della Biblioteca Belvedere! 📚 Scrivimi un autore o un argomento per cercare i libri nel catalogo.")
+            send_telegram(chat_id, "Benvenuto nell'assistente della Biblioteca Belvedere! 📚 Scrivimi un autore, un titolo o un argomento (es. libri di cucina, testi sul bullismo, commedie teatrali) per avviare la ricerca.")
             return "OK", 200
             
         thread = Thread(target=async_process_request, args=(chat_id, text))
