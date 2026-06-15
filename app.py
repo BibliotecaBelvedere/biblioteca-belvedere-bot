@@ -31,11 +31,21 @@ STOPWORDS = {
 }
 
 # DIZIONARIO DELLE MACRO-AREE TEMATICHE (Espansione della ricerca)
+# DIZIONARIO DELLE MACRO-AREE TEMATICHE (Espansione della ricerca aggiornato)
 TEMI_ESPANSI = {
     "cucin": ["cucin", "ricett", "gastronom", "diet", "piatt", "aliment", "mangiare"],
     "teatr": ["teatr", "commedia", "tragedia", "dramma", "atto", "scena", "copione"],
     "amor": ["amor", "passione", "sentimento", "innamor", "affetto"],
-    "bullis": ["bullis", "bullo", "cyberbulli", "violenza", "scuola", "ragazzi", "aggressione"]
+    "bullis": ["bullis", "bullo", "cyberbulli", "violenza", "scuola", "ragazzi", "aggressione"],
+    "giallo": ["giallo", "gialli", "thriller", "poliziesc", "assassin", "delitto", "mistero", "indagine"],
+    "noir": ["noir", "poliziesco", "hardboiled", "crimine", "indagine", "mistero"],
+    "avventur": ["avventur", "azione", "esplorazione", "viaggio", "pericolo", "sopravvivenza"],
+    "fantasy": ["fantasy", "fantastico", "magia", "drago", "spada", "creature", "leggenda"],
+    "manga": ["manga", "fumetto", "fumetti", "anime", "giappone", "giapponese", "shonen", "shojo"],
+    "anime": ["anime", "manga", "animazione", "cartone", "giappone"],
+    "fumett": ["fumett", "manga", "albo", "strisce", "vignette", "graphic novel"],
+    "albo": ["albo", "albi", "fumetto", "fumetti", "illustrato", "storia"],
+    "supereroi": ["supereroi", "supereroe", "marvel", "dc", "fumetto", "fumetti", "eroe", "poteri"]
 }
 
 def normalize(s):
@@ -102,14 +112,13 @@ def cerca_nel_db(query):
     if not parole_chiave:
         return []
 
-    # Identifichiamo se l'utente sta cercando un macro-tema
     parole_espanse = set()
     ricerca_tematica_attiva = False
     
     for parola in parole_chiave:
         trovato_tema = False
         for radice, sinonimi in TEMI_ESPANSI.items():
-            if radice in parola:
+            if radice in parola or parola in radice:
                 parole_espanse.update(sinonimi)
                 ricerca_tematica_attiva = True
                 trovato_tema = True
@@ -123,12 +132,10 @@ def cerca_nel_db(query):
     cursor = conn.cursor()
     
     if ricerca_tematica_attiva:
-        # Ricerca tematica: prendiamo i libri che contengono ALMENO uno dei sinonimi
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri = [f"%{p}%" for p in parole_espanse]
         sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)}"
     else:
-        # Ricerca mirata (es: Eco Pendolo): devono esserci TUTTE le parole
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri = [f"%{p}%" for p in parole_espanse]
         sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)}"
@@ -136,18 +143,33 @@ def cerca_nel_db(query):
     cursor.execute(sql_query, list(parametri))
     righe = cursor.fetchall()
     
-    # Paracadute se l'AND fallisce
     if not righe and not ricerca_tematica_attiva and len(parole_espanse) > 1:
         condizioni_or = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri_or = [f"%{p}%" for p in parole_espanse]
         sql_query_or = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni_or)}"
-        cursor.execute(sql_query_or, parametri_or)
+        cursor.execute(sql_query_or, [f"%{p}%" for p in parole_espanse])
         righe = cursor.fetchall()
         
     conn.close()
     
     if not righe:
         return []
+
+    libri_ordinati = []
+    for testo_completo, testo_norm in righe:
+        punteggio = 0
+        for pk in parole_chiave:
+            if pk in testo_norm:
+                punteggio += 10
+                
+        for pe in parole_espanse:
+            if pe in testo_norm:
+                punteggio += 1
+                
+        libri_ordinati.append((punteggio, testo_completo))
+        
+    libri_ordinati.sort(key=lambda x: x[0], reverse=True)
+    return [libro[1] for libro in libri_ordinati[:15]]
 
     # SISTEMA DI CALCOLO DELLA RILEVANZA
     # Diamo un punteggio a ogni libro in base a quante parole chiave ed esatte contiene
