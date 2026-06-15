@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import sqlite3
 import requests
@@ -15,7 +16,6 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 CATALOGO_FILE = "catalogo.txt"
 DB_FILE = "catalogo.db"
 
-# STOPWORDS ultra-potenziate per lasciare solo ed esclusivamente i nomi da cercare
 STOPWORDS = {
     'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
     'nel','nella','nelle','negli','nei','sul','sulla','sulle','sugli','sui','per',
@@ -39,6 +39,11 @@ def normalize(s):
     s = s.replace('č', 'c').replace('š', 's').replace('ś', 's').replace('ā', 'a')
     s = unicodedata.normalize("NFD", s)
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
+
+# Funzione personalizzata per SQLite che controlla i confini delle parole esatte
+def regexp(expr, item):
+    reg = re.compile(expr, re.IGNORECASE)
+    return reg.search(item) is not None
 
 def inizializza_database():
     if not os.path.exists(CATALOGO_FILE):
@@ -75,12 +80,10 @@ def inizializza_database():
             (blocco, normalize(blocco))
         )
     conn.commit()
-    
-    cursor.execute("SELECT COUNT(*) FROM libri")
-    conteggio = cursor.fetchone()[0]
     conn.close()
-    return f"Database ricostruito! Caricati {conteggio} libri."
+    return "Database ricostruito con successo!"
 
+# MOTORE DI RICERCA REGEX INTEGRATO
 def cerca_nel_db(query):
     q = normalize(query)
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
@@ -92,32 +95,32 @@ def cerca_nel_db(query):
         parole = ["cucin", "ricett"]
 
     conn = sqlite3.connect(DB_FILE)
+    # Registriamo la funzione REGEXP dentro SQLite
+    conn.create_function("REGEXP", 2, regexp)
     cursor = conn.cursor()
     
     condizioni = []
     parametri = []
     for parola in parole:
-        if parola in ["eco", "sof", "po"]:
-            # CORRETTO: Adesso cerca la parola con spazi intorno o parzialmente ovunque per sicurezza
-            condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ?)")
-            parametri.extend([f"% {parola} %", f"{parola} %", f"% {parola}", f"%. {parola}%"])
-        else:
-            condizioni.append("testo_normalizzato LIKE ?")
-            parametri.append(f"%{parola}%")
+        # La sequenza \\b garantisce che la parola sia isolata (confine di parola esatto)
+        condizioni.append("testo_normalizzato REGEXP ?")
+        parametri.append(rf"\b{parola}\b")
         
     if not condizioni:
         conn.close()
         return []
 
-    # Cerchiamo in modalità rigorosa con AND
-    sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 30"
+    # Eseguiamo un AND rigidissimo: devono esserci tutte le parole inserite come termini interi
+    sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 20"
     cursor.execute(sql_query, parametri)
     risultati = [row[0] for row in cursor.fetchall()]
     
-    # Tentativo di emergenza flessibile se l'AND è troppo severo
+    # Se la ricerca rigorosa fallisce (magari l'utente ha scritto un nome errato), proviamo con un OR parziale classico
     if not risultati and len(condizioni) > 1:
-        sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 15"
-        cursor.execute(sql_query_or, parametri)
+        condizioni_or = [ "testo_normalizzato LIKE ?" for _ in parole ]
+        parametri_or = [ f"%{p}%" for p in parole ]
+        sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni_or)} LIMIT 10"
+        cursor.execute(sql_query_or, parametri_or)
         risultati = [row[0] for row in cursor.fetchall()]
 
     conn.close()
@@ -153,22 +156,22 @@ def ask_gemini(user_message, testi_libri):
     context = "\n---\n".join(context_list)
     
     prompt_completo = (
-        "Sei l'assistente della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
+        "Sei l'assistente ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
         "Genera un elenco puntato chiaro ed elegante dei libri trovati.\n"
-        f"Dati grezzi del catalogo:\n{context}\n\n"
-        "ISTRUZIONI RIGIDE:\n"
-        "1. Includi nell'elenco SOLO i libri che sono coerenti con la richiesta dell'utente. Scarta i risultati palesemente fuori tema.\n"
-        "2. Per ogni libro valido scrivi su una sola riga: **Titolo**, Autore e Collocazione.\n"
-        "3. Non tagliare le frasi a metà.\n"
-        "4. Al termine dell'elenco aggiungi sempre la nota che invita a chiedere al bibliotecario."
+        f"Dati estratti dal catalogo:\n{context}\n\n"
+        "ISTRUZIONI OBBLIGATORIE:\n"
+        "1. Genera l'elenco includendo SOLO i volumi pertinenti con la richiesta dell'utente. Ignora i dati fuori tema.\n"
+        "2. Per ogni libro valido scrivi su una singola riga: **Titolo**, Autore e Collocazione.\n"
+        "3. Mantieni un formato schematico pulito senza ripetizioni.\n"
+        "4. Includi a fine messaggio l'invito istituzionale a rivolgersi al personale in sede."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
     if not response or response.status_code != 200:
         linee_emergenza = [
-            "📚 **Biblioteca Belvedere (SBS0CB) - Risultati della ricerca**:\n",
-            "Ecco i volumi trovati direttamente nel sistema:\n"
+            "📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca**:\n",
+            "Ecco i volumi trovati nel sistema:\n"
         ]
         for blocco in mostrati_subito:
             linee = [l.strip() for l in blocco.split('\n') if l.strip()]
@@ -176,18 +179,13 @@ def ask_gemini(user_message, testi_libri):
             linee_emergenza.append(f"• {info_libro}")
             
         linee_emergenza.append("\n_Nota: Questa è una selezione dei titoli disponibili. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere direttamente al bibliotecario per una ricerca completa._")
-        if piu_altri:
-            linee_emergenza.append(f"\n⚠️ *Nota*: Ci sono altri libri corrispondenti nel catalogo. Chiedi in sede per vederli tutti!")
         return "\n".join(linee_emergenza)
             
     try:
         data = response.json()
-        testo_ia = data['candidates'][0]['content']['parts'][0]['text']
-        if piu_altri:
-            testo_ia += f"\n\n⚠️ *Nota*: Ci sono altri libri corrispondenti nel catalogo. Chiedi in sede per consultarli tutti!"
-        return testo_ia
+        return data['candidates'][0]['content']['parts'][0]['text']
     except:
-        return "Errore nella formattazione dei dati di risposta."
+        return "Errore nella formattazione dei dati. Riprova."
 
 def send_telegram(chat_id, text):
     try:
@@ -201,7 +199,7 @@ def async_process_request(chat_id, text):
         reply = ask_gemini(text, libri_trovati)
         send_telegram(chat_id, reply)
     except Exception as e:
-        send_telegram(chat_id, "Si è verificato un piccolo problema nell'elaborazione. Riprova tra un istante.")
+        send_telegram(chat_id, "Si è verificato un problema nell'elaborazione della ricerca. Riprova.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
