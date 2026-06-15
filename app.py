@@ -94,7 +94,7 @@ def inizializza_database():
     except Exception as e:
         return f"ERRORE TECNICO durante la lettura/scrittura del file: {str(e)}"
 
-# MOTORE DI RICERCA INTELLIGENTE CON ESPANSIONE TEMATICA
+# MOTORE DI RICERCA INTELLIGENTE CON ORDINAMENTO PER RILEVANZA
 def cerca_nel_db(query):
     q = normalize(query)
     parole_chiave = [w for w in q.split() if len(w) >= 2 and w not in STOPWORDS]
@@ -102,50 +102,74 @@ def cerca_nel_db(query):
     if not parole_chiave:
         return []
 
-    # Controllo Espansione Tematica (Ricerca libera evoluta)
-    parole_finali = set()
+    # Identifichiamo se l'utente sta cercando un macro-tema
+    parole_espanse = set()
     ricerca_tematica_attiva = False
     
     for parola in parole_chiave:
         trovato_tema = False
         for radice, sinonimi in TEMI_ESPANSI.items():
             if radice in parola:
-                parole_finali.update(sinonimi)
+                parole_espanse.update(sinonimi)
                 ricerca_tematica_attiva = True
                 trovato_tema = True
                 break
         if not trovato_tema:
-            parole_finali.add(parola)
+            parole_espanse.add(parola)
 
-    parole_finali = list(parole_finali)
+    parole_espanse = list(parole_espanse)
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     if ricerca_tematica_attiva:
-        # Se l'utente cerca un TEMA (es. cucina), usiamo l'OR per catturare tutti i sinonimi correlati
-        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_finali]
-        parametri = [f"%{p}%" for p in parole_finali]
-        sql_query = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 15"
+        # Ricerca tematica: prendiamo i libri che contengono ALMENO uno dei sinonimi
+        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
+        parametri = [f"%{p}%" for p in parole_espanse]
+        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)}"
     else:
-        # Se cerca un incrocio (es: Eco Pendolo), usiamo l'AND per stringere sui criteri precisi
-        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_finali]
-        parametri = [f"%{p}%" for p in parole_finali]
-        sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 15"
+        # Ricerca mirata (es: Eco Pendolo): devono esserci TUTTE le parole
+        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
+        parametri = [f"%{p}%" for p in parole_espanse]
+        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)}"
         
     cursor.execute(sql_query, list(parametri))
     righe = cursor.fetchall()
     
-    # Paracadute: se l'AND rigoroso fallisce (magari per un refuso), prova in modalità più elastica
-    if not righe and not ricerca_tematica_attiva and len(parole_finali) > 1:
-        condizioni_or = ["testo_normalizzato LIKE ?" for _ in parole_finali]
-        parametri_or = [f"%{p}%" for p in parole_finali]
-        sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni_or)} LIMIT 10"
+    # Paracadute se l'AND fallisce
+    if not righe and not ricerca_tematica_attiva and len(parole_espanse) > 1:
+        condizioni_or = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
+        parametri_or = [f"%{p}%" for p in parole_espanse]
+        sql_query_or = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni_or)}"
         cursor.execute(sql_query_or, parametri_or)
         righe = cursor.fetchall()
         
     conn.close()
-    return [row[0] for row in righe]
+    
+    if not righe:
+        return []
+
+    # SISTEMA DI CALCOLO DELLA RILEVANZA
+    # Diamo un punteggio a ogni libro in base a quante parole chiave ed esatte contiene
+    libri_ordinati = []
+    for testo_completo, testo_norm in righe:
+        punteggio = 0
+        # Punti extra se contiene la parola ESATTA digitata dall'utente (es. "bullismo" o "cucina")
+        for pk in parole_chiave:
+            if pk in testo_norm:
+                punteggio += 10  # Peso massimo alla richiesta originale
+                
+        # Punti standard se contiene i sinonimi espansi
+        for pe in parole_espanse:
+            if pe in testo_norm:
+                punteggio += 1
+                
+        libri_ordinati.append((punteggio, testo_completo))
+        
+    # Ordiniamo dal punteggio più alto al più basso e prendiamo i migliori 15
+    libri_ordinati.sort(key=lambda x: x[0], reverse=True)
+    
+    return [libro[1] for libro in libri_ordinati[:15]]
 
 def call_gemini_api(model_name, prompt_text):
     try:
