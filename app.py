@@ -37,7 +37,6 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
-# PARSER INTELLIGENTE: Ricostruisce le schede del catalogo SBS0CB senza spezzarle
 def inizializza_database():
     if not os.path.exists(CATALOGO_FILE):
         return "Errore: catalogo.txt assente."
@@ -54,16 +53,13 @@ def inizializza_database():
     cursor.execute("DELETE FROM libri")
     
     with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
-        # Sostituiamo gli spazi unificatori spazzatura con a capo puliti
         contenuto = f.read().replace("\ufeff", "").replace("\r\n", "\n").replace("\u00a0", "\n")
         
-    # Dividiamo il catalogo usando come punto di riferimento l'indicatore di record del vostro software [nd]
     pezzi_raw = contenuto.split("[nd]")
     blocchi_effettivi = []
     
     for pezzo in pezzi_raw:
         linee = [l.strip() for l in pezzo.split("\n") if l.strip()]
-        # Eliminiamo le righe di intestazione del file generali
         linee_pulite = [l for l in linee if "Ordinamento Soggetto" not in l and "Biblioteca:" not in l and "Data e ora:" not in l]
         
         if linee_pulite:
@@ -82,6 +78,7 @@ def inizializza_database():
     conn.close()
     return f"Database ricostruito! Caricati {conteggio} libri reali e separati."
 
+# CERCATORE AGGIORNATO: Cerca parole esatte per evitare i falsi positivi (eco vs economica)
 def cerca_nel_db(query):
     q = normalize(query)
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
@@ -98,10 +95,15 @@ def cerca_nel_db(query):
     condizioni = []
     parametri = []
     for parola in parole:
-        condizioni.append("testo_normalizzato LIKE ?")
-        parametri.append(f"%{parola}%")
+        # Se la parola è molto corta (es. "eco"), forziamo la ricerca con spazi intorno o a inizio/fine riga
+        if len(parola) <= 3:
+            condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato = ?)")
+            parametri.extend([f"% {parola} %", f"{parola} %", f"% {parola}", parola])
+        else:
+            condizioni.append("testo_normalizzato LIKE ?")
+            parametri.append(f"%{parola}%")
         
-    sql_query = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)}"
+    sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 40"
     cursor.execute(sql_query, parametri)
     
     risultati = [row[0] for row in cursor.fetchall()]
@@ -132,7 +134,6 @@ def ask_gemini(user_message, testi_libri):
     context_list = []
     for blocco in mostrati_subito:
         linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-        # Mostriamo solo le prime 4 righe di ogni scheda (contengono tutto il necessario)
         blocco_corto = " | ".join(linee[:4])
         context_list.append(blocco_corto)
         
@@ -149,7 +150,6 @@ def ask_gemini(user_message, testi_libri):
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # PARACADUTE INTEGRATO
     if not response or response.status_code != 200:
         linee_emergenza = [
             "📚 **Biblioteca Belvedere (SBS0CB) - Catalogo Risultati**:\n",
@@ -162,14 +162,14 @@ def ask_gemini(user_message, testi_libri):
             
         linee_emergenza.append("\n_Nota: Questa è una selezione dei titoli disponibili. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere direttamente al bibliotecario per una ricerca completa._")
         if piu_altri:
-            linee_emergenza.append(f"\n⚠️ *Nota*: Ci sono altri {len(testi_libri) - limite_libri} libri corrispondenti nel catalogo. Chiedi in sede per vederli tutti!")
+            linee_emergenza.append(f"\n⚠️ *Nota*: Ci sono altri libri corrispondenti nel catalogo. Chiedi in sede per vederli tutti!")
         return "\n".join(linee_emergenza)
             
     try:
         data = response.json()
         testo_ia = data['candidates'][0]['content']['parts'][0]['text']
         if piu_altri:
-            testo_ia += f"\n\n⚠️ *Nota*: Ci sono altri {len(testi_libri) - limite_libri} libri corrispondenti nel catalogo. Chiedi in sede per consultarli tutti!"
+            testo_ia += f"\n\n⚠️ *Nota*: Ci sono altri libri corrispondenti nel catalogo. Chiedi in sede per consultarli tutti!"
         return testo_ia
     except:
         return "Errore nella ricezione dei dati. Riprova."
