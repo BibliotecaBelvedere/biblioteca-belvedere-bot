@@ -187,6 +187,7 @@ def ask_gemini(user_message, testi_libri):
     if not testi_libri:
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento."
     
+    # 1. Prepariamo il contesto per l'AI
     context_list = []
     for blocco in testi_libri:
         linee = [l.strip() for l in blocco.split('\n') if l.strip()]
@@ -195,33 +196,54 @@ def ask_gemini(user_message, testi_libri):
         
     context = "\n---\n".join(context_list)
     
+    # Prompt ottimizzato e più rapido da elaborare per evitare timeout
     prompt_completo = (
-        "Sei l'assistente ufficiale e bibliotecario esperto della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
-        f"L'utente ha chiesto: '{user_message}'\n\n"
-        f"Qui sotto hai un elenco di potenziali libri estratti grezzamente dal database:\n{context}\n\n"
-        "COMPITO CRUCIALI DA BIBLIOTECARIO (FILTRO DI COERENZA):\n"
-        "1. Analizza criticamente i libri forniti. Elimina e SCARTA tassativamente tutti i volumi che NON c'entrano nulla con la richiesta dell'utente (Ad esempio: se l'utente chiede MANGA o FUMETTI, scarta i classici come Esopo, saggi di Enzo Biagi o romanzi tradizionali, tieni SOLO i veri manga/fumetti o manuali per disegnarli).\n"
-        "2. Tra i libri rimasti coerenti, seleziona i migliori (massimo 12-15 risultati).\n"
-        "3. Formatta l'output come elenco puntato: **Titolo**, Autore ed eventualmente Collocazione su un'unica riga.\n"
-        "4. Se dopo il filtro non rimane NESSUN libro coerente, rispondi scusandoti dicendo che non ci sono volumi per questa specifica richiesta.\n"
-        "5. Concludi sempre con un saluto istituzionale e l'invito a venire in biblioteca a Siracusa."
+        "Sei l'assistente ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
+        f"L'utente cerca: '{user_message}'\n\n"
+        f"Lista libri candidati dal database:\n{context}\n\n"
+        "ISTRUZIONI RIGIDE:\n"
+        "1. Agisci da filtro: escludi tassativamente i libri fuori tema (es. se cercano manga scarta i classici/saggi; se cercano noir scarta i libri di psicologia o poesia).\n"
+        "2. Mostra solo i volumi davvero coerenti (max 12-15).\n"
+        "3. Formato richiesto: **Titolo**, Autore - Collocazione (su una sola riga per libro).\n"
+        "4. Chiudi con un saluto cordiale invitando l'utente in biblioteca a Siracusa."
     )
 
+    # Chiamiamo l'AI
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
+    # 2. SE GEMINI VA IN ERRORE O IN TIMEOUT, ATTIVIAMO UN'EMERGENZA INTELLIGENTE
     if not response or response.status_code != 200:
-        # Emergenza se le API falliscono
-        linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca**:\n"]
-        for blocco in testi_libri[:10]:
-            linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-            linee_emergenza.append(f"• {' - '.join(linee[:2])}")
+        q_clean = normalize(user_message)
+        parole_ricerca = [w for w in q_clean.split() if len(w) >= 3 and w not in STOPWORDS]
+        
+        linee_emergenza = [
+            "📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca (Modalità di Emergenza)**:\n",
+            "Il sistema centrale è temporaneamente sovraccarico, ecco i titoli più rilevanti estratti direttamente dal catalogo:\n"
+        ]
+        
+        contatore = 0
+        for blocco in testi_libri:
+            testo_norm = normalize(blocco)
+            # Controlliamo che il libro contenga almeno una delle parole cercate prima di mostrarlo
+            if any(p in testo_norm for p in parole_ricerca) or "fumett" in testo_norm or "giallo" in testo_norm:
+                linee = [l.strip() for l in blocco.split('\n') if l.strip()]
+                info_libro = " - ".join(linee[:3])
+                linee_emergenza.append(f"• {info_libro}")
+                contatore += 1
+            if contatore >= 10: # Limitiamo a 10 risultati in emergenza
+                break
+                
+        if contatore == 0:
+            return "Siamo spiacenti, il sistema è momentaneamente occupato. Riprova tra qualche istante con una richiesta più specifica."
+            
+        linee_emergenza.append("\n_Nota: Per una ricerca più approfondita, ti invitiamo a consultare il bibliotecario in sede._")
         return "\n".join(linee_emergenza)
             
     try:
         data = response.json()
         return data['candidates'][0]['content']['parts'][0]['text']
     except:
-        return "Errore di lettura della risposta dall'intelligenza artificiale."
+        return "Errore di lettura dei dati dall'intelligenza artificiale. Riprova tra un momento."
 
 def send_telegram(chat_id, text):
     try:
