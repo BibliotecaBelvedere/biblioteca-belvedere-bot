@@ -16,7 +16,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 CATALOGO_FILE = "catalogo.txt"
 DB_FILE = "catalogo.db"
 
-# STOPWORDS potenziate per isolare solo i nomi veri
+# STOPWORDS ultra-selettive
 STOPWORDS = {
     'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
     'nel','nella','nelle','negli','nei','sul','sulla','sulle','sugli','sui','per',
@@ -42,13 +42,17 @@ def normalize(s):
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
 def inizializza_database():
-    # Controllo minuscole/maiuscole flessibile per Linux
-    file_reale = CATALOGO_FILE
-    if not os.path.exists(file_reale):
-        if os.path.exists("Catalogo.txt"):
-            file_reale = "Catalogo.txt"
-        else:
-            return "Errore: catalogo.txt assente nella cartella principale."
+    # Ottieni la lista dei file sul server per fare debug visivo
+    file_presenti = os.listdir(".")
+    
+    file_reale = None
+    for f_name in file_presenti:
+        if f_name.lower() == "catalogo.txt":
+            file_reale = f_name
+            break
+            
+    if not file_reale:
+        return f"ERRORE: Il file catalogo.txt NON esiste su Render! File trovati nella root: {file_presenti}"
 
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -62,7 +66,7 @@ def inizializza_database():
         ''')
         cursor.execute("DELETE FROM libri")
         
-        # CODIFICA CORAZZATA: utf-8-sig pulisce i file Windows automaticamente, errors="ignore" evita il crash 500
+        # Apertura ultra-sicura flessibile
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
@@ -84,11 +88,11 @@ def inizializza_database():
             )
         conn.commit()
         conn.close()
-        return f"Database ricostruito con successo con {len(blocchi_effettivi)} libri!"
+        return f"SUCCESS: Database ricostruito correttamente! Caricati {len(blocchi_effettivi)} libri dal file '{file_reale}'."
     except Exception as e:
-        return f"Errore tecnico durante l'inizializzazione: {str(e)}"
+        return f"ERRORE TECNICO durante la lettura/scrittura del file: {str(e)}"
 
-# MOTORE DI RICERCA IBRIDO (DB + FILTRO PYTHON)
+# MOTORE IBRIDO DI PRECISIONE PYTHON
 def cerca_nel_db(query):
     q = normalize(query)
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
@@ -112,13 +116,15 @@ def cerca_nel_db(query):
         conn.close()
         return []
 
-    sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)} LIMIT 60"
+    # Cerchiamo i candidati grezzi che contengono i frammenti
+    sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)} LIMIT 100"
     cursor.execute(sql_query, parametri)
     righe = cursor.fetchall()
     conn.close()
     
     risultati_filtrati = []
     
+    # Controllo rigoroso sulle parole corte (evita che 'eco' matcha dentro 'recarsi')
     for testo_completo, testo_normalizzato in righe:
         valido = True
         for parola in parole:
@@ -129,17 +135,7 @@ def cerca_nel_db(query):
         if valido:
             risultati_filtrati.append(testo_completo)
             
-    if not risultati_filtrati and len(condizioni) > 1:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        condizioni_or = ["testo_normalizzato LIKE ?" for _ in parole]
-        parametri_or = [f"%{p}%" for p in parole]
-        sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni_or)} LIMIT 15"
-        cursor.execute(sql_query_or, parametri_or)
-        risultati_filtrati = [row[0] for row in cursor.fetchall()]
-        conn.close()
-            
-    return risultati_filtrati[:20]
+    return risultati_filtrati[:15]
 
 def call_gemini_api(model_name, prompt_text):
     try:
@@ -171,13 +167,12 @@ def ask_gemini(user_message, testi_libri):
     
     prompt_completo = (
         "Sei l'assistente ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
-        "Genera un elenco puntato chiaro ed elegante dei libri trovati.\n"
-        f"Dati estratti dal catalogo:\n{context}\n\n"
-        "ISTRUZIONI OBBLIGATORIE:\n"
-        "1. Genera l'elenco includendo SOLO i volumi strettamente pertinenti con la richiesta dell'utente.\n"
-        "2. Per ogni libro valido scrivi su una singola riga: **Titolo**, Autore e Collocazione.\n"
-        "3. Non inventare dati. Se mancano delle informazioni, omettile senza lasciare frasi a metà.\n"
-        "4. Includi a fine messaggio l'invito istituzionale a rivolgersi al personale in sede."
+        "Genera un elenco puntato dei libri trovati.\n"
+        f"Dati del catalogo:\n{context}\n\n"
+        "ISTRUZIONI RIGIDE:\n"
+        "1. Mostra SOLO i libri coerenti con l'autore o l'argomento cercato dall'utente.\n"
+        "2. Formato: **Titolo**, Autore e Collocazione su un'unica riga.\n"
+        "3. Chiudi sempre con un saluto istituzionale cordiale che invita a passare in sede."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
@@ -191,15 +186,14 @@ def ask_gemini(user_message, testi_libri):
             linee = [l.strip() for l in blocco.split('\n') if l.strip()]
             info_libro = " - ".join(linee[:3])
             linee_emergenza.append(f"• {info_libro}")
-            
-        linee_emergenza.append("\n_Nota: Questa è una selezione dei titoli disponibili. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere direttamente al bibliotecario per una ricerca completa._")
+        linee_emergenza.append("\n_Nota: Chiedi al bibliotecario per una ricerca completa in sede._")
         return "\n".join(linee_emergenza)
             
     try:
         data = response.json()
         return data['candidates'][0]['content']['parts'][0]['text']
     except:
-        return "Errore nella formattazione dei dati. Riprova."
+        return "Errore di lettura della risposta dall'intelligenza artificiale."
 
 def send_telegram(chat_id, text):
     try:
@@ -213,7 +207,7 @@ def async_process_request(chat_id, text):
         reply = ask_gemini(text, libri_trovati)
         send_telegram(chat_id, reply)
     except Exception as e:
-        send_telegram(chat_id, "Si è verificato un problema nell'elaborazione della ricerca. Riprova.")
+        send_telegram(chat_id, "Errore durante l'elaborazione dei dati della biblioteca.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
@@ -258,6 +252,5 @@ def home():
     return "Assistente Biblioteca Pronto.", 200
 
 if __name__ == "__main__":
-    # Rimosso il caricamento automatico all'avvio per evitare crash iniziali di Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
