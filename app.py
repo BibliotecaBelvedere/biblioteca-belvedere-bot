@@ -16,6 +16,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 CATALOGO_FILE = "catalogo.txt"
 DB_FILE = "catalogo.db"
 
+# STOPWORDS potenziate per isolare solo i nomi veri
 STOPWORDS = {
     'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
     'nel','nella','nelle','negli','nei','sul','sulla','sulle','sugli','sui','per',
@@ -40,11 +41,6 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
-# Funzione personalizzata per SQLite che controlla i confini delle parole esatte
-def regexp(expr, item):
-    reg = re.compile(expr, re.IGNORECASE)
-    return reg.search(item) is not None
-
 def inizializza_database():
     if not os.path.exists(CATALOGO_FILE):
         return "Errore: catalogo.txt assente."
@@ -63,7 +59,7 @@ def inizializza_database():
     with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
         contenuto = f.read().replace("\ufeff", "").replace("\r\n", "\n").replace("\u00a0", "\n")
         
-    pezzi_raw = contenuto.split("[nd]")
+    pezzi_raw = contenido.split("[nd]")
     blocchi_effettivi = []
     
     for pezzo in pezzi_raw:
@@ -83,7 +79,7 @@ def inizializza_database():
     conn.close()
     return "Database ricostruito con successo!"
 
-# MOTORE DI RICERCA REGEX INTEGRATO
+# MOTORE DI RICERCA IBRIDO (DB + FILTRO PYTHON)
 def cerca_nel_db(query):
     q = normalize(query)
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
@@ -95,36 +91,50 @@ def cerca_nel_db(query):
         parole = ["cucin", "ricett"]
 
     conn = sqlite3.connect(DB_FILE)
-    # Registriamo la funzione REGEXP dentro SQLite
-    conn.create_function("REGEXP", 2, regexp)
     cursor = conn.cursor()
     
+    # Cerchiamo nel DB i libri che contengono TUTTE le parole (usiamo AND con LIKE classico)
     condizioni = []
     parametri = []
     for parola in parole:
-        # La sequenza \\b garantisce che la parola sia isolata (confine di parola esatto)
-        condizioni.append("testo_normalizzato REGEXP ?")
-        parametri.append(rf"\b{parola}\b")
+        condizioni.append("testo_normalizzato LIKE ?")
+        parametri.append(f"%{parola}%")
         
     if not condizioni:
         conn.close()
         return []
 
-    # Eseguiamo un AND rigidissimo: devono esserci tutte le parole inserite come termini interi
-    sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 20"
+    sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)} LIMIT 60"
     cursor.execute(sql_query, parametri)
-    risultati = [row[0] for row in cursor.fetchall()]
-    
-    # Se la ricerca rigorosa fallisce (magari l'utente ha scritto un nome errato), proviamo con un OR parziale classico
-    if not risultati and len(condizioni) > 1:
-        condizioni_or = [ "testo_normalizzato LIKE ?" for _ in parole ]
-        parametri_or = [ f"%{p}%" for p in parole ]
-        sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni_or)} LIMIT 10"
-        cursor.execute(sql_query_or, parametri_or)
-        risultati = [row[0] for row in cursor.fetchall()]
-
+    righe = cursor.fetchall()
     conn.close()
-    return risultati
+    
+    risultati_filtrati = []
+    
+    # QUI AGISCE IL PARACADUTE PYTHON (Controlla che le parole corte siano isolate davvero)
+    for testo_completo, testo_normalizzato in righe:
+        valido = True
+        for parola in parole:
+            if len(parola) <= 3:
+                # Controlla se la parola è circondata da confini di parola (\b), impedendo falsi positivi
+                if not re.search(rf"\b{parola}\b", testo_normalizzato):
+                    valido = False
+                    break
+        if valido:
+            risultati_filtrati.append(testo_completo)
+            
+    # Se con l'AND rigidissimo non esce nulla, facciamo un tentativo di emergenza con OR
+    if not risultati_filtrati and len(condizioni) > 1:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        condizioni_or = ["testo_normalizzato LIKE ?" for _ in parole]
+        parametri_or = [f"%{p}%" for p in parole]
+        sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni_or)} LIMIT 15"
+        cursor.execute(sql_query_or, parametri_or)
+        risultati_filtrati = [row[0] for row in cursor.fetchall()]
+        conn.close()
+            
+    return risultati_filtrati[:20]
 
 def call_gemini_api(model_name, prompt_text):
     try:
@@ -145,7 +155,6 @@ def ask_gemini(user_message, testi_libri):
     
     limite_libri = 15
     mostrati_subito = testi_libri[:limite_libri]
-    piu_altri = len(testi_libri) > limite_libri
     
     context_list = []
     for blocco in mostrati_subito:
@@ -160,9 +169,9 @@ def ask_gemini(user_message, testi_libri):
         "Genera un elenco puntato chiaro ed elegante dei libri trovati.\n"
         f"Dati estratti dal catalogo:\n{context}\n\n"
         "ISTRUZIONI OBBLIGATORIE:\n"
-        "1. Genera l'elenco includendo SOLO i volumi pertinenti con la richiesta dell'utente. Ignora i dati fuori tema.\n"
+        "1. Genera l'elenco includendo SOLO i volumi strettamente pertinenti con la richiesta dell'utente.\n"
         "2. Per ogni libro valido scrivi su una singola riga: **Titolo**, Autore e Collocazione.\n"
-        "3. Mantieni un formato schematico pulito senza ripetizioni.\n"
+        "3. Non inventare dati. Se mancano delle informazioni, omettile senza lasciare frasi a metà.\n"
         "4. Includi a fine messaggio l'invito istituzionale a rivolgersi al personale in sede."
     )
 
