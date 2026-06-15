@@ -8,7 +8,6 @@ from threading import Thread
 
 app = Flask(__name__)
 
-# Recupero variabili d'ambiente
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -16,7 +15,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 CATALOGO_FILE = "catalogo.txt"
 DB_FILE = "catalogo.db"
 
-# Lista STOPWORDS corretta e pulita dai duplicati
+# STOPWORDS ultra-potenziate per lasciare solo ed esclusivamente i nomi da cercare
 STOPWORDS = {
     'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
     'nel','nella','nelle','negli','nei','sul','sulla','sulle','sugli','sui','per',
@@ -28,8 +27,9 @@ STOPWORDS = {
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
     'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','adatti','alle',
-    'crechi','creca','su','di','da','a','in','qualcosa',
-    'mostrami','elenco','lista','autori','autore','volumi','volume','titoli','titolo'
+    'crechi','creca','su','di','da','a','in','qualcosa','su','per',
+    'mostrami','elenco','lista','autori','autore','volumi','volume','titoli','titolo',
+    'teatro','commedia','tragedia','dramma','romanzo','romanzi','saggio','saggi'
 }
 
 def normalize(s):
@@ -58,7 +58,7 @@ def inizializza_database():
     with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
         contenuto = f.read().replace("\ufeff", "").replace("\r\n", "\n").replace("\u00a0", "\n")
         
-    pezzi_raw = contenuto.split("[nd]")
+    pezzi_raw = contenido.split("[nd]")
     blocchi_effettivi = []
     
     for pezzo in pezzi_raw:
@@ -81,6 +81,7 @@ def inizializza_database():
     conn.close()
     return f"Database ricostruito! Caricati {conteggio} libri."
 
+# IL MOTORE DI RICERCA CHIRURGICO (Usa AND se ci sono più parole importanti)
 def cerca_nel_db(query):
     q = normalize(query)
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
@@ -97,9 +98,10 @@ def cerca_nel_db(query):
     condizioni = []
     parametri = []
     for parola in parole:
-        if len(parola) <= 3:
-            condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato = ?)")
-            parametri.extend([f"% {parola} %", f"{parola} %", f"% {parola}", parola])
+        if parola in ["eco", "sof", "po"]: # Gestione stringhe corte sensibili
+            condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ?)")
+            parameters_sub = [f"% {parola} %", f"{parola} %", f"% {parola}"]
+            parametri.extend(parameters_sub)
         else:
             condizioni.append("testo_normalizzato LIKE ?")
             parametri.append(f"%{parola}%")
@@ -108,10 +110,19 @@ def cerca_nel_db(query):
         conn.close()
         return []
 
-    sql_query = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 40"
-    cursor.execute(sql_query, parametri)
+    # USIAMO AND: Tutti i criteri devono essere soddisfatti contemporaneamente!
+    sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 30"
+    cursor.execute(sql_query, wizard_params:=parametri)
     
     risultati = [row[0] for row in cursor.fetchall()]
+    
+    # SE CON 'AND' NON TROVA NULLA (magari l'utente ha scritto Sofocle Edipo ma sono schede separate)
+    # Allora fa un tentativo di emergenza con 'OR' ma molto limitato
+    if not risultati and len(condizioni) > 1:
+        sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 15"
+        cursor.execute(sql_query_or, parametri)
+        risultati = [row[0] for row in cursor.fetchall()]
+
     conn.close()
     return risultati
 
@@ -149,9 +160,10 @@ def ask_gemini(user_message, testi_libri):
         "Genera un elenco puntato chiaro ed elegante dei libri trovati.\n"
         f"Dati grezzi del catalogo:\n{context}\n\n"
         "ISTRUZIONI RIGIDE:\n"
-        "1. Per ogni libro scrivi su una sola riga: **Titolo**, Autore e Collocazione.\n"
-        "2. Non tagliare le frasi a metà. Leggi bene i dati grezzi prima di scrivere.\n"
-        "3. Al termine dell'elenco aggiungi sempre la nota che invita a chiedere al bibliotecario."
+        "1. Includi nell'elenco SOLO i libri che sono coerenti con la richiesta dell'utente. Scarta i risultati palesemente fuori tema.\n"
+        "2. Per ogni libro valido scrivi su una sola riga: **Titolo**, Autore e Collocazione.\n"
+        "3. Non tagliare le frasi a metà.\n"
+        "4. Al termine dell'elenco aggiungi sempre la nota che invita a chiedere al bibliotecario."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
