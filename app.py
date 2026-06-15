@@ -37,9 +37,10 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
+# PARSER INTELLIGENTE: Ricostruisce le schede del catalogo SBS0CB senza spezzarle
 def inizializza_database():
     if not os.path.exists(CATALOGO_FILE):
-        return "File catalogo.txt NON trovato su GitHub!"
+        return "Errore: catalogo.txt assente."
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -53,16 +54,23 @@ def inizializza_database():
     cursor.execute("DELETE FROM libri")
     
     with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
-        contenuto = f.read().replace("\r\n", "\n")
+        # Sostituiamo gli spazi unificatori spazzatura con a capo puliti
+        contenuto = f.read().replace("\ufeff", "").replace("\r\n", "\n").replace("\u00a0", "\n")
         
-    blocchi = [b.strip() for b in contenuto.split("\n\n") if b.strip()]
+    # Dividiamo il catalogo usando come punto di riferimento l'indicatore di record del vostro software [nd]
+    pezzi_raw = contenuto.split("[nd]")
+    blocchi_effettivi = []
     
-    # Se il file non si divide con il doppio a capo, forziamo la divisione ogni 4 righe
-    if len(blocchi) <= 5:
-        righe = [r.strip() for r in contenuto.split("\n") if r.strip()]
-        blocchi = ["\n".join(righe[i:i+4]) for i in range(0, len(righe), 4)]
+    for pezzo in pezzi_raw:
+        linee = [l.strip() for l in pezzo.split("\n") if l.strip()]
+        # Eliminiamo le righe di intestazione del file generali
+        linee_pulite = [l for l in linee if "Ordinamento Soggetto" not in l and "Biblioteca:" not in l and "Data e ora:" not in l]
+        
+        if linee_pulite:
+            testo_blocco = "\n".join(linee_pulite)
+            blocchi_effettivi.append(testo_blocco)
 
-    for blocco in blocchi:
+    for blocco in blocchi_effettivi:
         cursor.execute(
             "INSERT INTO libri (testo_completo, testo_normalizzato) VALUES (?, ?)",
             (blocco, normalize(blocco))
@@ -72,7 +80,7 @@ def inizializza_database():
     cursor.execute("SELECT COUNT(*) FROM libri")
     conteggio = cursor.fetchone()[0]
     conn.close()
-    return f"Database sincronizzato. Caricati {conteggio} blocchi totali."
+    return f"Database ricostruito! Caricati {conteggio} libri reali e separati."
 
 def cerca_nel_db(query):
     q = normalize(query)
@@ -117,39 +125,42 @@ def ask_gemini(user_message, testi_libri):
     if not testi_libri:
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta."
     
-    limite_libri = 12
+    limite_libri = 15
     mostrati_subito = testi_libri[:limite_libri]
     piu_altri = len(testi_libri) > limite_libri
     
     context_list = []
     for blocco in mostrati_subito:
         linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-        blocco_corto = " | ".join(linee[:3])
+        # Mostriamo solo le prime 4 righe di ogni scheda (contengono tutto il necessario)
+        blocco_corto = " | ".join(linee[:4])
         context_list.append(blocco_corto)
         
     context = "\n---\n".join(context_list)
     
     prompt_completo = (
         "Sei l'assistente della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
-        "Genera un elenco puntato semplice dei libri trovati.\n"
-        f"Dati:\n{context}\n\n"
-        "Per ogni libro scrivi su una sola riga: **Titolo**, Autore e Collocazione.\n"
+        "Genera un elenco puntato dei libri trovati.\n"
+        f"Dati estratti dal catalogo:\n{context}\n\n"
+        "Per ogni libro scrivi su una sola riga in modo pulito ed elegante: **Titolo**, Autore e Collocazione.\n"
+        "Evita elenchi confusionari o sotto-punti. Sii schematico.\n"
         "Al termine aggiungi la nota che invita a chiedere al bibliotecario."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
+    # PARACADUTE INTEGRATO
     if not response or response.status_code != 200:
         linee_emergenza = [
-            "📚 **Biblioteca Belvedere (SBS0CB) - Risultati del Catalogo**:\n",
-            "Ecco i volumi trovati direttamente nel nostro sistema:\n"
+            "📚 **Biblioteca Belvedere (SBS0CB) - Catalogo Risultati**:\n",
+            "Ecco i volumi corrispondenti trovati nel sistema:\n"
         ]
         for blocco in mostrati_subito:
             linee = [l.strip() for l in blocco.split('\n') if l.strip()]
             info_libro = " - ".join(linee[:3])
             linee_emergenza.append(f"• {info_libro}")
             
-        linee_emergenza.append("\n_Nota: Questa è una selezione automatica dei titoli disponibili. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere al bibliotecario per una ricerca completa._")
+        linee_emergenza.append("\n_Nota: Questa è una selezione dei titoli disponibili. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere direttamente al bibliotecario per una ricerca completa._")
         if piu_altri:
             linee_emergenza.append(f"\n⚠️ *Nota*: Ci sono altri {len(testi_libri) - limite_libri} libri corrispondenti nel catalogo. Chiedi in sede per vederli tutti!")
         return "\n".join(linee_emergenza)
@@ -161,7 +172,7 @@ def ask_gemini(user_message, testi_libri):
             testo_ia += f"\n\n⚠️ *Nota*: Ci sono altri {len(testi_libri) - limite_libri} libri corrispondenti nel catalogo. Chiedi in sede per consultarli tutti!"
         return testo_ia
     except:
-        return "Si è verificato un errore nella formattazione."
+        return "Errore nella ricezione dei dati. Riprova."
 
 def send_telegram(chat_id, text):
     try:
@@ -189,7 +200,7 @@ def telegram_webhook():
             return "OK", 200
             
         if text == "/start":
-            send_telegram(chat_id, "Benvenuto nell'assistente della Biblioteca Belvedere! 📚 Scrivimi un autore o un argomento per cercare i libri.")
+            send_telegram(chat_id, "Benvenuto nell'assistente della Biblioteca Belvedere! 📚 Scrivimi un autore o un argomento per cercare i libri nel catalogo.")
             return "OK", 200
             
         thread = Thread(target=async_process_request, args=(chat_id, text))
@@ -200,34 +211,24 @@ def telegram_webhook():
             
     return "OK", 200
 
-# PAGINA DI DIAGNOSTICA: Ci dice esattamente cosa vede Python
 @app.route("/debug_catalogo", methods=["GET"])
 def debug_catalogo():
     try:
-        if not os.path.exists(CATALOGO_FILE):
-            return "Errore: File catalogo.txt non trovato sul server."
-            
-        with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
-            testo = f.read(1500) # Leggiamo solo i primi 1500 caratteri di test
-            
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM libri")
         conteggio = cursor.fetchone()[0]
-        
-        # Vediamo i primi 3 blocchi salvati nel DB
         cursor.execute("SELECT testo_completo FROM libri LIMIT 3")
         esempi = [row[0] for row in cursor.fetchall()]
         conn.close()
         
         return jsonify({
-            "file_size_caratteri_totali": len(testo),
-            "blocchi_creati_nel_db": conteggio,
-            "anteprima_primi_caratteri_file": testo,
-            "esempi_blocchi_db": esempi
+            "stato_database": "Ricostruito con successo",
+            "libri_totali_distinti_nel_db": conteggio,
+            "anteprima_schede_reali": esempi
         })
     except Exception as e:
-        return f"Errore durante la diagnostica: {str(e)}"
+        return f"Errore: {str(e)}"
 
 @app.route("/setup", methods=["GET"])
 def setup():
