@@ -27,7 +27,7 @@ STOPWORDS = {
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
     'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','adatti','alle',
-    'crechi','creca','su','di','da','a','in','qualcosa','su','per',
+    'crechi','creca','su','di','da','a','in','qualcosa',
     'mostrami','elenco','lista','autori','autore','volumi','volume','titoli','titolo',
     'teatro','commedia','tragedia','dramma','romanzo','romanzi','saggio','saggi'
 }
@@ -58,7 +58,7 @@ def inizializza_database():
     with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
         contenuto = f.read().replace("\ufeff", "").replace("\r\n", "\n").replace("\u00a0", "\n")
         
-    pezzi_raw = contenido.split("[nd]")
+    pezzi_raw = contenuto.split("[nd]")
     blocchi_effettivi = []
     
     for pezzo in pezzi_raw:
@@ -81,7 +81,7 @@ def inizializza_database():
     conn.close()
     return f"Database ricostruito! Caricati {conteggio} libri."
 
-# IL MOTORE DI RICERCA CHIRURGICO (Usa AND se ci sono più parole importanti)
+# IL MOTORE DI RICERCA CORRETTO SENZA WALRUS OPERATOR
 def cerca_nel_db(query):
     q = normalize(query)
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
@@ -98,10 +98,9 @@ def cerca_nel_db(query):
     condizioni = []
     parametri = []
     for parola in parole:
-        if parola in ["eco", "sof", "po"]: # Gestione stringhe corte sensibili
+        if parola in ["eco", "sof", "po"]:
             condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ?)")
-            parameters_sub = [f"% {parola} %", f"{parola} %", f"% {parola}"]
-            parametri.extend(parameters_sub)
+            parametri.extend([f"% {parola} %", f"{parola} %", f"% {parola}"])
         else:
             condizioni.append("testo_normalizzato LIKE ?")
             parametri.append(f"%{parola}%")
@@ -110,14 +109,12 @@ def cerca_nel_db(query):
         conn.close()
         return []
 
-    # USIAMO AND: Tutti i criteri devono essere soddisfatti contemporaneamente!
+    # Cerchiamo prima in modalità rigorosa con AND
     sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 30"
-    cursor.execute(sql_query, wizard_params:=parametri)
-    
+    cursor.execute(sql_query, parametri)
     risultati = [row[0] for row in cursor.fetchall()]
     
-    # SE CON 'AND' NON TROVA NULLA (magari l'utente ha scritto Sofocle Edipo ma sono schede separate)
-    # Allora fa un tentativo di emergenza con 'OR' ma molto limitato
+    # Se non trova nulla con AND, fa un tentativo di emergenza più morbido con OR
     if not risultati and len(condizioni) > 1:
         sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 15"
         cursor.execute(sql_query_or, parametri)
