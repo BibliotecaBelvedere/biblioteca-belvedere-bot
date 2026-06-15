@@ -39,7 +39,7 @@ def normalize(s):
 
 def inizializza_database():
     if not os.path.exists(CATALOGO_FILE):
-        return
+        return "File catalogo.txt NON trovato su GitHub!"
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -57,9 +57,10 @@ def inizializza_database():
         
     blocchi = [b.strip() for b in contenuto.split("\n\n") if b.strip()]
     
-    if len(blocchi) <= 1:
+    # Se il file non si divide con il doppio a capo, forziamo la divisione ogni 4 righe
+    if len(blocchi) <= 5:
         righe = [r.strip() for r in contenuto.split("\n") if r.strip()]
-        blocchi = ["\n".join(righe[i:i+5]) for i in range(0, len(righe), 5)]
+        blocchi = ["\n".join(righe[i:i+4]) for i in range(0, len(righe), 4)]
 
     for blocco in blocchi:
         cursor.execute(
@@ -67,7 +68,11 @@ def inizializza_database():
             (blocco, normalize(blocco))
         )
     conn.commit()
+    
+    cursor.execute("SELECT COUNT(*) FROM libri")
+    conteggio = cursor.fetchone()[0]
     conn.close()
+    return f"Database sincronizzato. Caricati {conteggio} blocchi totali."
 
 def cerca_nel_db(query):
     q = normalize(query)
@@ -102,7 +107,7 @@ def call_gemini_api(model_name, prompt_text):
             url,
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": prompt_text}]}]},
-            timeout=8  # Abbassato il timeout a 8 secondi per non far morire la chat di Telegram
+            timeout=8
         )
         return response
     except:
@@ -132,10 +137,8 @@ def ask_gemini(user_message, testi_libri):
         "Al termine aggiungi la nota che invita a chiedere al bibliotecario."
     )
 
-    # Proviamo a chiamare Gemini
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # PARACADUTE AUTOMATICO: Se Gemini fallisce o è lento, il Database risponde da solo!
     if not response or response.status_code != 200:
         linee_emergenza = [
             "📚 **Biblioteca Belvedere (SBS0CB) - Risultati del Catalogo**:\n",
@@ -143,15 +146,12 @@ def ask_gemini(user_message, testi_libri):
         ]
         for blocco in mostrati_subito:
             linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-            # Prendiamo il meglio che c'è nelle prime righe del database
             info_libro = " - ".join(linee[:3])
             linee_emergenza.append(f"• {info_libro}")
             
         linee_emergenza.append("\n_Nota: Questa è una selezione automatica dei titoli disponibili. In biblioteca potrebbero essercene altri, ti invitiamo a chiedere al bibliotecario per una ricerca completa._")
-        
         if piu_altri:
             linee_emergenza.append(f"\n⚠️ *Nota*: Ci sono altri {len(testi_libri) - limite_libri} libri corrispondenti nel catalogo. Chiedi in sede per vederli tutti!")
-            
         return "\n".join(linee_emergenza)
             
     try:
@@ -161,8 +161,7 @@ def ask_gemini(user_message, testi_libri):
             testo_ia += f"\n\n⚠️ *Nota*: Ci sono altri {len(testi_libri) - limite_libri} libri corrispondenti nel catalogo. Chiedi in sede per consultarli tutti!"
         return testo_ia
     except:
-        # Se anche la decodifica fallisce, usiamo comunque i dati del database
-        return f"Trovati {len(testi_libri)} libri. Chiedi al bibliotecario la lista completa per cucina/autore."
+        return "Si è verificato un errore nella formattazione."
 
 def send_telegram(chat_id, text):
     try:
@@ -201,12 +200,41 @@ def telegram_webhook():
             
     return "OK", 200
 
+# PAGINA DI DIAGNOSTICA: Ci dice esattamente cosa vede Python
+@app.route("/debug_catalogo", methods=["GET"])
+def debug_catalogo():
+    try:
+        if not os.path.exists(CATALOGO_FILE):
+            return "Errore: File catalogo.txt non trovato sul server."
+            
+        with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
+            testo = f.read(1500) # Leggiamo solo i primi 1500 caratteri di test
+            
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM libri")
+        conteggio = cursor.fetchone()[0]
+        
+        # Vediamo i primi 3 blocchi salvati nel DB
+        cursor.execute("SELECT testo_completo FROM libri LIMIT 3")
+        esempi = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        
+        return jsonify({
+            "file_size_caratteri_totali": len(testo),
+            "blocchi_creati_nel_db": conteggio,
+            "anteprima_primi_caratteri_file": testo,
+            "esempi_blocchi_db": esempi
+        })
+    except Exception as e:
+        return f"Errore durante la diagnostica: {str(e)}"
+
 @app.route("/setup", methods=["GET"])
 def setup():
-    inizializza_database()
+    res = inizializza_database()
     render_url = request.host_url.rstrip("/")
     resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
-    return jsonify({"status": "Database pronto e Webhook collegato!", "telegram_response": resp.json()})
+    return jsonify({"status": res, "telegram_response": resp.json()})
 
 @app.route("/", methods=["GET"])
 def home():
