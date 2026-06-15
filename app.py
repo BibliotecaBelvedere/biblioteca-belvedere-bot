@@ -81,7 +81,6 @@ def inizializza_database():
     conn.close()
     return f"Database ricostruito! Caricati {conteggio} libri."
 
-# IL MOTORE DI RICERCA CORRETTO SENZA WALRUS OPERATOR
 def cerca_nel_db(query):
     q = normalize(query)
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
@@ -99,8 +98,9 @@ def cerca_nel_db(query):
     parametri = []
     for parola in parole:
         if parola in ["eco", "sof", "po"]:
-            condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ?)")
-            parametri.extend([f"% {parola} %", f"{parola} %", f"% {parola}"])
+            # CORRETTO: Adesso cerca la parola con spazi intorno o parzialmente ovunque per sicurezza
+            condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ?)")
+            parametri.extend([f"% {parola} %", f"{parola} %", f"% {parola}", f"%. {parola}%"])
         else:
             condizioni.append("testo_normalizzato LIKE ?")
             parametri.append(f"%{parola}%")
@@ -109,12 +109,12 @@ def cerca_nel_db(query):
         conn.close()
         return []
 
-    # Cerchiamo prima in modalità rigorosa con AND
+    # Cerchiamo in modalità rigorosa con AND
     sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 30"
     cursor.execute(sql_query, parametri)
     risultati = [row[0] for row in cursor.fetchall()]
     
-    # Se non trova nulla con AND, fa un tentativo di emergenza più morbido con OR
+    # Tentativo di emergenza flessibile se l'AND è troppo severo
     if not risultati and len(condizioni) > 1:
         sql_query_or = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 15"
         cursor.execute(sql_query_or, parametri)
@@ -196,9 +196,12 @@ def send_telegram(chat_id, text):
         pass
 
 def async_process_request(chat_id, text):
-    libri_trovati = cerca_nel_db(text)
-    reply = ask_gemini(text, libri_trovati)
-    send_telegram(chat_id, reply)
+    try:
+        libri_trovati = cerca_nel_db(text)
+        reply = ask_gemini(text, libri_trovati)
+        send_telegram(chat_id, reply)
+    except Exception as e:
+        send_telegram(chat_id, "Si è verificato un piccolo problema nell'elaborazione. Riprova tra un istante.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
