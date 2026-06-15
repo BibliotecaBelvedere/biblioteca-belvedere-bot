@@ -8,6 +8,7 @@ from threading import Thread
 
 app = Flask(__name__)
 
+# Recupero variabili d'ambiente
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -15,7 +16,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 CATALOGO_FILE = "catalogo.txt"
 DB_FILE = "catalogo.db"
 
-# Lista potenziata al massimo per eliminare i fronzoli dalle richieste degli utenti
+# Lista STOPWORDS corretta e pulita dai duplicati
 STOPWORDS = {
     'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
     'nel','nella','nelle','negli','nei','sul','sulla','sulle','sugli','sui','per',
@@ -26,9 +27,9 @@ STOPWORDS = {
     'fare','dire','cerca','cerco','vorrei','voglio','cercare','trovare','libro',
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
-    'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','sono','adatti','alle',
-    'crechi','creca','su','di','da','a','in','con','su','per','tra','fra','qualcosa',
-    'mostrami','elenco','lista','lista','autori','autore','volumi','volume','titoli','titolo'
+    'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','adatti','alle',
+    'crechi','creca','su','di','da','a','in','qualcosa',
+    'mostrami','elenco','lista','autori','autore','volumi','volume','titoli','titolo'
 }
 
 def normalize(s):
@@ -57,7 +58,7 @@ def inizializza_database():
     with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
         contenuto = f.read().replace("\ufeff", "").replace("\r\n", "\n").replace("\u00a0", "\n")
         
-    pezzi_raw = contenido.split("[nd]")
+    pezzi_raw = contenuto.split("[nd]")
     blocchi_effettivi = []
     
     for pezzo in pezzi_raw:
@@ -82,8 +83,6 @@ def inizializza_database():
 
 def cerca_nel_db(query):
     q = normalize(query)
-    
-    # Estraiamo SOLO le parole vere (es. "sofocle", "vittorini") escludendo "libri", "su", "mi", "cerchi"
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
     if not parole:
@@ -99,15 +98,16 @@ def cerca_nel_db(query):
     parametri = []
     for parola in parole:
         if len(parola) <= 3:
-            # Per parole corte come Eco cerchiamo la parola esatta isolata
             condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato = ?)")
             parametri.extend([f"% {parola} %", f"{parola} %", f"% {parola}", parola])
         else:
-            # Per parole normali cerchiamo la corrispondenza parziale
             condizioni.append("testo_normalizzato LIKE ?")
             parametri.append(f"%{parola}%")
         
-    # Ritorniamo a OR per essere inclusivi, ma limitiamo a 20 risultati massimi
+    if not condizioni:
+        conn.close()
+        return []
+
     sql_query = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 40"
     cursor.execute(sql_query, parametri)
     
@@ -139,7 +139,6 @@ def ask_gemini(user_message, testi_libri):
     context_list = []
     for blocco in mostrati_subito:
         linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-        # Prendiamo fino a 5 righe per non perdere pezzi di titolo o autori complessi (come Brecht)
         blocco_corto = " | ".join(linee[:5])
         context_list.append(blocco_corto)
         
@@ -157,7 +156,6 @@ def ask_gemini(user_message, testi_libri):
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # PARACADUTE INTEGRATO PER EVITARE SCHERMATE VUOTE
     if not response or response.status_code != 200:
         linee_emergenza = [
             "📚 **Biblioteca Belvedere (SBS0CB) - Risultati della ricerca**:\n",
