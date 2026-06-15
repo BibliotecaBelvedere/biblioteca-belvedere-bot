@@ -15,6 +15,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 CATALOGO_FILE = "catalogo.txt"
 DB_FILE = "catalogo.db"
 
+# Lista potenziata al massimo per eliminare i fronzoli dalle richieste degli utenti
 STOPWORDS = {
     'che','del','della','delle','degli','dei','dal','dalla','dalle','dagli','dai',
     'nel','nella','nelle','negli','nei','sul','sulla','sulle','sugli','sui','per',
@@ -26,7 +27,8 @@ STOPWORDS = {
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
     'mi','dai','dacci','dimmi','trovami','cercami','sono','ci','sono','adatti','alle',
-    'crechi','creca'
+    'crechi','creca','su','di','da','a','in','con','su','per','tra','fra','qualcosa',
+    'mostrami','elenco','lista','lista','autori','autore','volumi','volume','titoli','titolo'
 }
 
 def normalize(s):
@@ -55,7 +57,7 @@ def inizializza_database():
     with open(CATALOGO_FILE, "r", encoding="utf-8") as f:
         contenuto = f.read().replace("\ufeff", "").replace("\r\n", "\n").replace("\u00a0", "\n")
         
-    pezzi_raw = contenuto.split("[nd]")
+    pezzi_raw = contenido.split("[nd]")
     blocchi_effettivi = []
     
     for pezzo in pezzi_raw:
@@ -76,11 +78,12 @@ def inizializza_database():
     cursor.execute("SELECT COUNT(*) FROM libri")
     conteggio = cursor.fetchone()[0]
     conn.close()
-    return f"Database ricostruito! Caricati {conteggio} libri reali e separati."
+    return f"Database ricostruito! Caricati {conteggio} libri."
 
-# CERCATORE AGGIORNATO: Cerca parole esatte per evitare i falsi positivi (eco vs economica)
 def cerca_nel_db(query):
     q = normalize(query)
+    
+    # Estraiamo SOLO le parole vere (es. "sofocle", "vittorini") escludendo "libri", "su", "mi", "cerchi"
     parole = [w for w in q.split() if len(w) > 2 and w not in STOPWORDS]
     
     if not parole:
@@ -95,15 +98,17 @@ def cerca_nel_db(query):
     condizioni = []
     parametri = []
     for parola in parole:
-        # Se la parola è molto corta (es. "eco"), forziamo la ricerca con spazi intorno o a inizio/fine riga
         if len(parola) <= 3:
+            # Per parole corte come Eco cerchiamo la parola esatta isolata
             condizioni.append("(testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato LIKE ? OR testo_normalizzato = ?)")
             parametri.extend([f"% {parola} %", f"{parola} %", f"% {parola}", parola])
         else:
+            # Per parole normali cerchiamo la corrispondenza parziale
             condizioni.append("testo_normalizzato LIKE ?")
             parametri.append(f"%{parola}%")
         
-    sql_query = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 40"
+    # Ritorniamo a OR per essere inclusivi, ma limitiamo a 20 risultati massimi
+    sql_query = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 40"
     cursor.execute(sql_query, parametri)
     
     risultati = [row[0] for row in cursor.fetchall()]
@@ -125,7 +130,7 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
-        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta."
+        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento."
     
     limite_libri = 15
     mostrati_subito = testi_libri[:limite_libri]
@@ -134,26 +139,29 @@ def ask_gemini(user_message, testi_libri):
     context_list = []
     for blocco in mostrati_subito:
         linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-        blocco_corto = " | ".join(linee[:4])
+        # Prendiamo fino a 5 righe per non perdere pezzi di titolo o autori complessi (come Brecht)
+        blocco_corto = " | ".join(linee[:5])
         context_list.append(blocco_corto)
         
     context = "\n---\n".join(context_list)
     
     prompt_completo = (
         "Sei l'assistente della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
-        "Genera un elenco puntato dei libri trovati.\n"
-        f"Dati estratti dal catalogo:\n{context}\n\n"
-        "Per ogni libro scrivi su una sola riga in modo pulito ed elegante: **Titolo**, Autore e Collocazione.\n"
-        "Evita elenchi confusionari o sotto-punti. Sii schematico.\n"
-        "Al termine aggiungi la nota che invita a chiedere al bibliotecario."
+        "Genera un elenco puntato chiaro ed elegante dei libri trovati.\n"
+        f"Dati grezzi del catalogo:\n{context}\n\n"
+        "ISTRUZIONI RIGIDE:\n"
+        "1. Per ogni libro scrivi su una sola riga: **Titolo**, Autore e Collocazione.\n"
+        "2. Non tagliare le frasi a metà. Leggi bene i dati grezzi prima di scrivere.\n"
+        "3. Al termine dell'elenco aggiungi sempre la nota che invita a chiedere al bibliotecario."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
+    # PARACADUTE INTEGRATO PER EVITARE SCHERMATE VUOTE
     if not response or response.status_code != 200:
         linee_emergenza = [
-            "📚 **Biblioteca Belvedere (SBS0CB) - Catalogo Risultati**:\n",
-            "Ecco i volumi corrispondenti trovati nel sistema:\n"
+            "📚 **Biblioteca Belvedere (SBS0CB) - Risultati della ricerca**:\n",
+            "Ecco i volumi trovati direttamente nel sistema:\n"
         ]
         for blocco in mostrati_subito:
             linee = [l.strip() for l in blocco.split('\n') if l.strip()]
@@ -172,7 +180,7 @@ def ask_gemini(user_message, testi_libri):
             testo_ia += f"\n\n⚠️ *Nota*: Ci sono altri libri corrispondenti nel catalogo. Chiedi in sede per consultarli tutti!"
         return testo_ia
     except:
-        return "Errore nella ricezione dei dati. Riprova."
+        return "Errore nella formattazione dei dati di risposta."
 
 def send_telegram(chat_id, text):
     try:
@@ -210,25 +218,6 @@ def telegram_webhook():
         pass
             
     return "OK", 200
-
-@app.route("/debug_catalogo", methods=["GET"])
-def debug_catalogo():
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM libri")
-        conteggio = cursor.fetchone()[0]
-        cursor.execute("SELECT testo_completo FROM libri LIMIT 3")
-        esempi = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        
-        return jsonify({
-            "stato_database": "Ricostruito con successo",
-            "libri_totali_distinti_nel_db": conteggio,
-            "anteprima_schede_reali": esempi
-        })
-    except Exception as e:
-        return f"Errore: {str(e)}"
 
 @app.route("/setup", methods=["GET"])
 def setup():
