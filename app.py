@@ -34,7 +34,7 @@ STOPWORDS = {
 TEMI_ESPANSI = {
     "cucin": ["cucin", "ricett", "gastronom", "diet", "piatt", "aliment", "mangiare", "artusi", "cracco", "cannavacciuolo"],
     "teatr": ["teatr", "commedia", "tragedia", "dramma", "atto", "scena", "copione", "pirandello", "de filippo", "goldoni", "shakespeare"],
-    "amor": ["amor", "passione", "sentimento", "innamor", "affetto", "steel", "casati modignani", "sparks", "rosa", "romance", "allende", "m小說", "sveva"],
+    "amor": ["amor", "passione", "sentimento", "innamor", "affetto", "steel", "casati modignani", "sparks", "rosa", "romance", "allende", "sveva"],
     "rosa": ["rosa", "amor", "steel", "casati modignani", "sparks", "sentimentale", "passione", "romance"],
     "bullis": ["bullis", "bullo", "cyberbulli", "violenza", "scuola", "ragazzi", "aggressione"],
     "giallo": ["giallo", "gialli", "thriller", "poliziesc", "assassin", "delitto", "mistero", "indagine", "christie", "conan doyle", "camilleri", "simenon"],
@@ -130,7 +130,6 @@ def cerca_nel_db(query):
     cursor = conn.cursor()
     
     if ricerca_tematica_attiva:
-        # Se cerchiamo un genere, generiamo condizioni flessibili per catturare sinonimi e autori del genere
         condizioni = []
         parametri = []
         for p in parole_espanse:
@@ -203,7 +202,7 @@ def ask_gemini(user_message, testi_libri):
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento."
     
     context_list = []
-    for i, blocco in enumerate(testi_libri[:10]): # Passiamo fino a 10 libri completi
+    for i, blocco in enumerate(testi_libri[:10]):
         context_list.append(f"CANDIDATO #{i+1}:\n{blocco}")
         
     context = "\n\n---\n\n".join(context_list)
@@ -252,3 +251,55 @@ def send_telegram(chat_id, text):
     try:
         requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
     except:
+        pass
+
+def async_process_request(chat_id, text):
+    try:
+        libri_trovati = cerca_nel_db(text)
+        reply = ask_gemini(text, libri_trovati)
+        send_telegram(chat_id, reply)
+    except Exception as e:
+        send_telegram(chat_id, "Errore durante l'elaborazione dei dati della biblioteca.")
+
+@app.route("/webhook_biblioteca", methods=["POST"])
+def telegram_webhook():
+    try:
+        data = request.get_json()
+        if not data or "message" not in data:
+            return "OK", 200
+            
+        message = data["message"]
+        chat_id = message.get("chat", {}).get("id")
+        text = message.get("text", "").strip()
+        
+        if not chat_id or not text:
+            return "OK", 200
+            
+        if text == "/start":
+            send_telegram(chat_id, "Benvenuto nell'assistente della Biblioteca Belvedere! 📚 Scrivimi un autore, un titolo o un argomento per avviare la ricerca.")
+            return "OK", 200
+            
+        thread = Thread(target=async_process_request, args=(chat_id, text))
+        thread.start()
+    except Exception as e:
+        pass
+    return "OK", 200
+
+@app.route("/setup", methods=["GET"])
+def setup():
+    res = inizializza_database()
+    try:
+        render_url = request.host_url.rstrip("/")
+        resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
+        tele_res = resp.json()
+    except Exception as e:
+        tele_res = f"Errore connessione Telegram: {str(e)}"
+    return jsonify({"status": res, "telegram_response": tele_res})
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Assistente Biblioteca Pronto.", 200
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
