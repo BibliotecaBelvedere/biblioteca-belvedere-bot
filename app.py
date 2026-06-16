@@ -30,19 +30,20 @@ STOPWORDS = {
     'mostrami','elenco','lista','autori','autore','volumi','volume','titoli','titolo'
 }
 
+# POTENZIAMENTO DEI GENERI: Inseriamo gli autori chiave per aiutare il database a pescare i libri giusti per l'AI
 TEMI_ESPANSI = {
-    "cucin": ["cucin", "ricett", "gastronom", "diet", "piatt", "aliment", "mangiare"],
-    "teatr": ["teatr", "commedia", "tragedia", "dramma", "atto", "scena", "copione"],
-    "amor": ["amor", "passione", "sentimento", "innamor", "affetto"],
+    "cucin": ["cucin", "ricett", "gastronom", "diet", "piatt", "aliment", "mangiare", "artusi", "cracco", "cannavacciuolo"],
+    "teatr": ["teatr", "commedia", "tragedia", "dramma", "atto", "scena", "copione", "pirandello", "de filippo", "goldoni", "shakespeare"],
+    "amor": ["amor", "passione", "sentimento", "innamor", "affetto", "steel", "casati modignani", "sparks", "rosa", "romance", "allende", "m小說", "sveva"],
+    "rosa": ["rosa", "amor", "steel", "casati modignani", "sparks", "sentimentale", "passione", "romance"],
     "bullis": ["bullis", "bullo", "cyberbulli", "violenza", "scuola", "ragazzi", "aggressione"],
-    "giallo": ["giallo", "gialli", "thriller", "poliziesc", "assassin", "delitto", "mistero", "indagine"],
-    "noir": ["noir", "poliziesco", "hardboiled", "crimine", "indagine", "mistero"],
-    "avventur": ["avventur", "azione", "esplorazione", "viaggio", "pericolo", "sopravvivenza"],
-    "fantasy": ["fantasy", "fantastico", "magia", "drago", "spada", "creature", "leggenda"],
-    "manga": ["manga", "fumetto", "fumetti", "anime", "giappone", "giapponese", "shonen", "shojo"],
+    "giallo": ["giallo", "gialli", "thriller", "poliziesc", "assassin", "delitto", "mistero", "indagine", "christie", "conan doyle", "camilleri", "simenon"],
+    "noir": ["noir", "poliziesco", "hardboiled", "crimine", "indagine", "mistero", "carlotto", "carofiglio", "indridason", "lucarelli"],
+    "avventur": ["avventur", "azione", "esplorazione", "viaggio", "pericolo", "sopravvivenza", "salgari", "verne", "cuba"],
+    "fantasy": ["fantasy", "fantastico", "magia", "drago", "spada", "creature", "leggenda", "tolkien", "rowling", "martin", "troisi"],
+    "manga": ["manga", "fumetto", "fumetti", "anime", "giappone", "giapponese", "shonen", "shojo", "shinzo", "rowell", "panini"],
     "anime": ["anime", "manga", "animazione", "cartone", "giappone"],
-    "fumett": ["fumett", "manga", "albo", "strisce", "vignette", "graphic novel"],
-    "albo": ["albo", "albi", "fumetto", "fumetti", "illustrato", "storia"],
+    "fumett": ["fumett", "manga", "albo", "strisce", "vignette", "graphic novel", "zerocalcare", "disney", "tex"],
     "supereroi": ["supereroi", "supereroe", "marvel", "dc", "fumetto", "fumetti", "eroe", "poteri"]
 }
 
@@ -129,9 +130,13 @@ def cerca_nel_db(query):
     cursor = conn.cursor()
     
     if ricerca_tematica_attiva:
-        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
-        parametri = [f"%{p}%" for p in parole_espanse]
-        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25"
+        # Se cerchiamo un genere, generiamo condizioni flessibili per catturare sinonimi e autori del genere
+        condizioni = []
+        parametri = []
+        for p in parole_espanse:
+            condizioni.append("testo_normalizzato LIKE ?")
+            parametri.append(f"%{p}%")
+        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 30"
     else:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri = [f"%{p}%" for p in parole_espanse]
@@ -177,7 +182,7 @@ def call_gemini_api(model_name, prompt_text):
                 }
             ],
             "generationConfig": {
-                "temperature": 0.1  # Abbassata al minimo per renderlo un filtro rigidissimo
+                "temperature": 0.2
             }
         }
         
@@ -197,9 +202,8 @@ def ask_gemini(user_message, testi_libri):
     if not testi_libri:
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento."
     
-    # MANDIAMO MENO LIBRI (MAX 8) MA COMPLETI DI OGNI DETTAGLIO PER FAR CAPIRE IL CONTESTO ALL'AI
     context_list = []
-    for i, blocco in enumerate(testi_libri[:8]):
+    for i, blocco in enumerate(testi_libri[:10]): # Passiamo fino a 10 libri completi
         context_list.append(f"CANDIDATO #{i+1}:\n{blocco}")
         
     context = "\n\n---\n\n".join(context_list)
@@ -208,33 +212,27 @@ def ask_gemini(user_message, testi_libri):
         "Sei l'assistente virtuale ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
         f"L'utente sta cercando volumi attinenti a: '{user_message}'\n\n"
         f"Analizza attentamente la seguente lista di libri grezzi estratti dal database:\n\n{context}\n\n"
-        "REGOLE DI SELEZIONE E FILTRO (SEVERISSIME):\n"
-        "1. Devi agire da filtro intelligente: valuta se il libro risponde davvero all'intento dell'utente.\n"
-        "   - Esempio: Se l'utente cerca 'cucina', i ricettari e la gastronomia vanno inclusi. I romanzi gialli o saggi che contengono la parola 'cucina' solo nel titolo o nelle note (es. 'Un cadavere in cucina' o citazioni nel testo) vanno SCARTATI senza pietà.\n"
-        "   - Esempio: Se l'utente cerca 'manga', tieni solo i veri fumetti giapponesi. Scarta classici o biografie finiti lì per errore.\n"
-        "2. Per ogni libro accettato, mostra all'utente il TITOLO COMPLETO, l'Autore e la Collocazione in un formato elegante.\n"
-        "3. Formato di output richiesto (elenco puntato):\n"
+        "REGOLE DI SELEZIONE E FILTRO:\n"
+        "1. Agisci da filtro intelligente: seleziona i libri coerenti con la richiesta (es. romanzi d'amore/rosa, gialli, saggi ecc.).\n"
+        "2. Se l'utente chiede romanzi d'amore o storie d'amore, includi i romanzi sentimentali di autori come Danielle Steel, Sveva Casati Modignani o simili presenti nella lista.\n"
+        "3. Per ogni libro accettato, mostra all'utente il TITOLO COMPLETO, l'Autore e la Collocazione.\n"
+        "4. Formato di output richiesto (elenco puntato):\n"
         "   * **Titolo del Libro**, Autore - Collocazione\n"
-        "4. Se l'AI scarta tutti i libri perché nessuno è davvero attinente, rispondi dicendo che non ci sono volumi specifici su questo argomento al momento.\n"
-        "5. Chiudi sempre con un saluto cordiale invitando l'utente in sede a Siracusa."
+        "5. Se nessuno dei libri è coerente, rispondi spiegando gentilmente che non ci sono volumi specifici su questo tema.\n"
+        "6. Chiudi sempre con un invito cordiale a venire a trovarci in sede a Siracusa."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # SALVAGENTE DI EMERGENZA (Se la rete salta)
     if not response or response.status_code != 200:
         q_clean = normalize(user_message)
         parole_ricerca = [w for w in q_clean.split() if len(w) >= 3 and w not in STOPWORDS]
         linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca**:\n"]
-        PAROLE_BANDITE_MANGA = ["esopo", "aesopus", "favole", "biagi", "mastroianni", "brecht", "barbaro"]
         contatore = 0
         
         for blocco in testi_libri:
             testo_norm = normalize(blocco)
-            if "manga" in q_clean or "fumett" in q_clean:
-                if any(bad in testo_norm for bad in PAROLE_BANDITE_MANGA):
-                    continue
-            if any(p in testo_norm for p in parole_ricerca) or "fumett" in testo_norm or "giallo" in testo_norm or "cucin" in testo_norm:
+            if any(p in testo_norm for p in parole_ricerca) or "steel" in testo_norm or "casati" in testo_norm:
                 linee = [l.strip() for l in blocco.split('\n') if l.strip()]
                 info_libro = " - ".join(linee[:3])
                 linee_emergenza.append(f"• {info_libro}")
@@ -254,55 +252,3 @@ def send_telegram(chat_id, text):
     try:
         requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
     except:
-        pass
-
-def async_process_request(chat_id, text):
-    try:
-        libri_trovati = cerca_nel_db(text)
-        reply = ask_gemini(text, libri_trovati)
-        send_telegram(chat_id, reply)
-    except Exception as e:
-        send_telegram(chat_id, "Errore durante l'elaborazione dei dati della biblioteca.")
-
-@app.route("/webhook_biblioteca", methods=["POST"])
-def telegram_webhook():
-    try:
-        data = request.get_json()
-        if not data or "message" not in data:
-            return "OK", 200
-            
-        message = data["message"]
-        chat_id = message.get("chat", {}).get("id")
-        text = message.get("text", "").strip()
-        
-        if not chat_id or not text:
-            return "OK", 200
-            
-        if text == "/start":
-            send_telegram(chat_id, "Benvenuto nell'assistente della Biblioteca Belvedere! 📚 Scrivimi un autore, un titolo o un argomento per avviare la ricerca.")
-            return "OK", 200
-            
-        thread = Thread(target=async_process_request, args=(chat_id, text))
-        thread.start()
-    except Exception as e:
-        pass
-    return "OK", 200
-
-@app.route("/setup", methods=["GET"])
-def setup():
-    res = inizializza_database()
-    try:
-        render_url = request.host_url.rstrip("/")
-        resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
-        tele_res = resp.json()
-    except Exception as e:
-        tele_res = f"Errore connessione Telegram: {str(e)}"
-    return jsonify({"status": res, "telegram_response": tele_res})
-
-@app.route("/", methods=["GET"])
-def home():
-    return "Assistente Biblioteca Pronto.", 200
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
