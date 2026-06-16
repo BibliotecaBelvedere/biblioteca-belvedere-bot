@@ -131,7 +131,6 @@ def cerca_nel_db(query):
     if ricerca_tematica_attiva:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri = [f"%{p}%" for p in parole_espanse]
-        # Peschiamo fino a 45 libri per dare all'AI materiale su cui scegliere ed eliminare gli intrusi
         sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 45"
     else:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
@@ -169,9 +168,9 @@ def cerca_nel_db(query):
     libri_ordinati.sort(key=lambda x: x[0], reverse=True)
     return [libro[1] for libro in libri_ordinati]
 
+
 def call_gemini_api(model_name, prompt_text):
     try:
-        # Endpoint aggiornato e più tollerante per la serie Gemini 2.x
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         
         payload = {
@@ -182,7 +181,7 @@ def call_gemini_api(model_name, prompt_text):
                 }
             ],
             "generationConfig": {
-                "temperature": 0.2  # Mantiene l'AI precisa e focalizzata sul filtro
+                "temperature": 0.2
             }
         }
         
@@ -192,15 +191,22 @@ def call_gemini_api(model_name, prompt_text):
             json=payload,
             timeout=12
         )
+        
+        # LOG IN REALTÀ AUMENTATA SU RENDER
+        print(f"[GEMINI LOG] Status Code: {response.status_code}")
+        if response.status_code != 200:
+            print(f"[GEMINI LOG] Errore dettagliato: {response.text}")
+            
         return response
     except Exception as e:
+        print(f"[GEMINI LOG] Eccezione di rete: {str(e)}")
         return None
-# LA VERA INNOVAZIONE: IL FILTRO INTELLIGENTE DI GEMINI
+
+
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento."
     
-    # 1. Prepariamo il contesto per l'AI
     context_list = []
     for blocco in testi_libri:
         linee = [l.strip() for l in blocco.split('\n') if l.strip()]
@@ -209,54 +215,59 @@ def ask_gemini(user_message, testi_libri):
         
     context = "\n---\n".join(context_list)
     
-    # Prompt ottimizzato e più rapido da elaborare per evitare timeout
     prompt_completo = (
         "Sei l'assistente ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
         f"L'utente cerca: '{user_message}'\n\n"
         f"Lista libri candidati dal database:\n{context}\n\n"
         "ISTRUZIONI RIGIDE:\n"
-        "1. Agisci da filtro: escludi tassativamente i libri fuori tema (es. se cercano manga scarta i classici/saggi; se cercano noir scarta i libri di psicologia o poesia).\n"
+        "1. Agisci da filtro: escludi i libri fuori tema (es. scarta classici/saggi se cercano manga).\n"
         "2. Mostra solo i volumi davvero coerenti (max 12-15).\n"
-        "3. Formato richiesto: **Titolo**, Autore - Collocazione (su una sola riga per libro).\n"
-        "4. Chiudi con un saluto cordiale invitando l'utente in biblioteca a Siracusa."
+        "3. Formato: **Titolo**, Autore - Collocazione.\n"
+        "4. Chiudi invitando l'utente in biblioteca a Siracusa."
     )
 
-    # Chiamiamo l'AI
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # 2. SE GEMINI VA IN ERRORE O IN TIMEOUT, ATTIVIAMO UN'EMERGENZA INTELLIGENTE
+    # EMERGENZA INTELLIGENTE CON FILTRO RIGIDO AUTOMATICO
     if not response or response.status_code != 200:
         q_clean = normalize(user_message)
         parole_ricerca = [w for w in q_clean.split() if len(w) >= 3 and w not in STOPWORDS]
         
         linee_emergenza = [
             "📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca (Modalità di Emergenza)**:\n",
-            "Il sistema centrale è temporaneamente sovraccarico, ecco i titoli più rilevanti estratti direttamente dal catalogo:\n"
+            "Il sistema centrale è temporaneamente in manutenzione, ecco i titoli più rilevanti estratti direttamente:\n"
         ]
         
+        PAROLE_BANDITE_MANGA = ["esopo", "aesopus", "favole", "biagi", "mastroianni", "brecht", "barbaro"]
         contatore = 0
+        
         for blocco in testi_libri:
             testo_norm = normalize(blocco)
-            # Controlliamo che il libro contenga almeno una delle parole cercate prima di mostrarlo
-            if any(p in testo_norm for p in parole_ricerca) or "fumett" in testo_norm or "giallo" in testo_norm:
+            
+            if "manga" in q_clean or "fumett" in q_clean:
+                if any(bad in testo_norm for bad in PAROLE_BANDITE_MANGA):
+                    continue
+            
+            if any(p in testo_norm for p in parole_ricerca) or "fumett" in testo_norm or "giallo" in testo_norm or "cucin" in testo_norm:
                 linee = [l.strip() for l in blocco.split('\n') if l.strip()]
                 info_libro = " - ".join(linee[:3])
                 linee_emergenza.append(f"• {info_libro}")
                 contatore += 1
-            if contatore >= 10: # Limitiamo a 10 risultati in emergenza
+            if contatore >= 10:
                 break
                 
         if contatore == 0:
-            return "Siamo spiacenti, il sistema è momentaneamente occupato. Riprova tra qualche istante con una richiesta più specifica."
+            return "Siamo spiacenti, il sistema è momentaneamente occupato. Riprova tra qualche istante."
             
-        linee_emergenza.append("\n_Nota: Per una ricerca più approfondita, ti invitiamo a consultare il bibliotecario in sede._")
+        linee_emergenza.append("\n_Nota: Per una ricerca accurata, ti invitiamo a consultare il bibliotecario in sede._")
         return "\n".join(linee_emergenza)
             
     try:
         data = response.json()
         return data['candidates'][0]['content']['parts'][0]['text']
     except:
-        return "Errore di lettura dei dati dall'intelligenza artificiale. Riprova tra un momento."
+        return "Errore di lettura dei dati dall'intelligenza artificiale."
+
 
 def send_telegram(chat_id, text):
     try:
