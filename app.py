@@ -192,9 +192,6 @@ def call_gemini_api(model_name, prompt_text):
         )
         
         print(f"[GEMINI LOG] Status Code: {response.status_code}")
-        if response.status_code != 200:
-            print(f"[GEMINI LOG] Errore dettagliato: {response.text}")
-            
         return response
     except Exception as e:
         print(f"[GEMINI LOG] Eccezione di rete: {str(e)}")
@@ -204,44 +201,53 @@ def ask_gemini(user_message, testi_libri):
     if not testi_libri:
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento."
     
+    q_clean = normalize(user_message)
+    
     context_list = []
-    for blocco in testi_libri[:20]:
+    for blocco in testi_libri[:25]:
         linee = [l.strip() for l in blocco.split('\n') if l.strip()]
+        
+        # TRUCCO: Se nel testo completo c'è la parola chiave ma manca nel titolo, la esplicitiamo per l'AI
+        indizi = []
+        if "cucin" in normalize(blocco) or "ricet" in normalize(blocco):
+            indizi.append("[Tema: Cucina/Gastronomia]")
+        if "manga" in normalize(blocco) or "fumet" in normalize(blocco):
+            indizi.append("[Tema: Manga/Fumetti]")
+            
+        tag_indizio = " ".join(indizi)
         blocco_super_compatto = " | ".join(linee[:2])
+        if tag_indizio:
+            blocco_super_compatto += f" {tag_indizio}"
+            
         context_list.append(blocco_super_compatto)
         
     context = "\n---\n".join(context_list)
     
     prompt_completo = (
-        "Sei l'assistente ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
-        f"L'utente cerca: '{user_message}'\n\n"
-        f"Lista libri:\n{context}\n\n"
-        "COMPITO:\n"
-        "1. Escludi i libri totalmente fuori tema.\n"
-        "2. Elenca i volumi coerenti (formato: **Titolo**, Autore - Collocazione).\n"
-        "3. Saluta invitando l'utente in biblioteca a Siracusa."
+        "Sei l'assistente virtuale ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
+        f"L'utente sta cercando: '{user_message}'\n\n"
+        f"Ecco l'elenco dei libri candidati trovati nel nostro catalogo:\n{context}\n\n"
+        "ISTRUZIONI IMPORTANTI:\n"
+        "1. Seleziona SOLO i libri che sono inerenti alla richiesta dell'utente (aiutati con i tag [Tema: ...]).\n"
+        "2. Formatta i risultati scelti ESATTAMENTE in questo modo, usando l'elenco puntato:\n"
+        "   * **Autore/Titolo**, Note - Collocazione\n"
+        "3. Se non trovi nessun libro coerente nella lista, rispondi scusandoti e dicendo che non ci sono risultati.\n"
+        "4. Concludi sempre con un invito cordiale a venire a trovarci in sede a Siracusa."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
     if not response or response.status_code != 200:
-        q_clean = normalize(user_message)
         parole_ricerca = [w for w in q_clean.split() if len(w) >= 3 and w not in STOPWORDS]
-        
-        linee_emergenza = [
-            "📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca**:\n"
-        ]
-        
+        linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca**:\n"]
         PAROLE_BANDITE_MANGA = ["esopo", "aesopus", "favole", "biagi", "mastroianni", "brecht", "barbaro"]
         contatore = 0
         
         for blocco in testi_libri:
             testo_norm = normalize(blocco)
-            
             if "manga" in q_clean or "fumett" in q_clean:
                 if any(bad in testo_norm for bad in PAROLE_BANDITE_MANGA):
                     continue
-            
             if any(p in testo_norm for p in parole_ricerca) or "fumett" in testo_norm or "giallo" in testo_norm or "cucin" in testo_norm:
                 linee = [l.strip() for l in blocco.split('\n') if l.strip()]
                 info_libro = " - ".join(linee[:2])
@@ -249,10 +255,8 @@ def ask_gemini(user_message, testi_libri):
                 contatore += 1
             if contatore >= 12:
                 break
-                
         if contatore == 0:
             return "Siamo spiacenti, nessun volume corrisponde alla ricerca corrente."
-            
         linee_emergenza.append("\n_Nota: Per consultare i volumi, ti aspettiamo in sede a Siracusa._")
         return "\n".join(linee_emergenza)
             
