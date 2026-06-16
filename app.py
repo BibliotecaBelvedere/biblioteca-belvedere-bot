@@ -21,7 +21,7 @@ STOPWORDS = {
     'con','una','uno','gli','alla','allo','alle','agli','col','coi','tra','fra',
     'non','qui','qua','sua','suo','suoi','sue','mio','mia','miei','mie','tuo',
     'tua','tuoi','tue','questo','questa','questi','queste','quello','quella',
-    'quelli','quelle','anche','come','dove','quando','mentre','essere','avere',
+    'quelli','quelle','anche','como','dove','quando','mentre','essere','avere',
     'fare','dire','cerca','cerco','vorrei','voglio','cercare','trovare','libro',
     'libri','testo','testi','parli','parla','parlano','riguarda','riguardano',
     'tratta','trattano','scritto','scritta','uscito','uscita','hai','avete','trova','un',
@@ -131,19 +131,18 @@ def cerca_nel_db(query):
     if ricerca_tematica_attiva:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri = [f"%{p}%" for p in parole_espanse]
-        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 45"
+        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25"
     else:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri = [f"%{p}%" for p in parole_espanse]
-        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)} LIMIT 30"
+        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)} LIMIT 20"
         
     cursor.execute(sql_query, list(parametri))
     righe = cursor.fetchall()
     
     if not righe and not ricerca_tematica_attiva and len(parole_espanse) > 1:
         condizioni_or = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
-        parametri_or = [f"%{p}%" for p in parole_espanse]
-        sql_query_or = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni_or)} LIMIT 30"
+        sql_query_or = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni_or)} LIMIT 20"
         cursor.execute(sql_query_or, [f"%{p}%" for p in parole_espanse])
         righe = cursor.fetchall()
         
@@ -158,11 +157,9 @@ def cerca_nel_db(query):
         for pk in parole_chiave:
             if pk in testo_norm:
                 punteggio += 10
-                
         for pe in parole_espanse:
             if pe in testo_norm:
                 punteggio += 1
-                
         libri_ordinati.append((punteggio, testo_completo))
         
     libri_ordinati.sort(key=lambda x: x[0], reverse=True)
@@ -180,7 +177,7 @@ def call_gemini_api(model_name, prompt_text):
                 }
             ],
             "generationConfig": {
-                "temperature": 0.2
+                "temperature": 0.1  # Abbassata al minimo per renderlo un filtro rigidissimo
             }
         }
         
@@ -190,7 +187,6 @@ def call_gemini_api(model_name, prompt_text):
             json=payload,
             timeout=12
         )
-        
         print(f"[GEMINI LOG] Status Code: {response.status_code}")
         return response
     except Exception as e:
@@ -201,43 +197,33 @@ def ask_gemini(user_message, testi_libri):
     if not testi_libri:
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento."
     
-    q_clean = normalize(user_message)
-    
+    # MANDIAMO MENO LIBRI (MAX 8) MA COMPLETI DI OGNI DETTAGLIO PER FAR CAPIRE IL CONTESTO ALL'AI
     context_list = []
-    for blocco in testi_libri[:25]:
-        linee = [l.strip() for l in blocco.split('\n') if l.strip()]
+    for i, blocco in enumerate(testi_libri[:8]):
+        context_list.append(f"CANDIDATO #{i+1}:\n{blocco}")
         
-        # TRUCCO: Se nel testo completo c'è la parola chiave ma manca nel titolo, la esplicitiamo per l'AI
-        indizi = []
-        if "cucin" in normalize(blocco) or "ricet" in normalize(blocco):
-            indizi.append("[Tema: Cucina/Gastronomia]")
-        if "manga" in normalize(blocco) or "fumet" in normalize(blocco):
-            indizi.append("[Tema: Manga/Fumetti]")
-            
-        tag_indizio = " ".join(indizi)
-        blocco_super_compatto = " | ".join(linee[:2])
-        if tag_indizio:
-            blocco_super_compatto += f" {tag_indizio}"
-            
-        context_list.append(blocco_super_compatto)
-        
-    context = "\n---\n".join(context_list)
+    context = "\n\n---\n\n".join(context_list)
     
     prompt_completo = (
         "Sei l'assistente virtuale ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
-        f"L'utente sta cercando: '{user_message}'\n\n"
-        f"Ecco l'elenco dei libri candidati trovati nel nostro catalogo:\n{context}\n\n"
-        "ISTRUZIONI IMPORTANTI:\n"
-        "1. Seleziona SOLO i libri che sono inerenti alla richiesta dell'utente (aiutati con i tag [Tema: ...]).\n"
-        "2. Formatta i risultati scelti ESATTAMENTE in questo modo, usando l'elenco puntato:\n"
-        "   * **Autore/Titolo**, Note - Collocazione\n"
-        "3. Se non trovi nessun libro coerente nella lista, rispondi scusandoti e dicendo che non ci sono risultati.\n"
-        "4. Concludi sempre con un invito cordiale a venire a trovarci in sede a Siracusa."
+        f"L'utente sta cercando volumi attinenti a: '{user_message}'\n\n"
+        f"Analizza attentamente la seguente lista di libri grezzi estratti dal database:\n\n{context}\n\n"
+        "REGOLE DI SELEZIONE E FILTRO (SEVERISSIME):\n"
+        "1. Devi agire da filtro intelligente: valuta se il libro risponde davvero all'intento dell'utente.\n"
+        "   - Esempio: Se l'utente cerca 'cucina', i ricettari e la gastronomia vanno inclusi. I romanzi gialli o saggi che contengono la parola 'cucina' solo nel titolo o nelle note (es. 'Un cadavere in cucina' o citazioni nel testo) vanno SCARTATI senza pietà.\n"
+        "   - Esempio: Se l'utente cerca 'manga', tieni solo i veri fumetti giapponesi. Scarta classici o biografie finiti lì per errore.\n"
+        "2. Per ogni libro accettato, mostra all'utente il TITOLO COMPLETO, l'Autore e la Collocazione in un formato elegante.\n"
+        "3. Formato di output richiesto (elenco puntato):\n"
+        "   * **Titolo del Libro**, Autore - Collocazione\n"
+        "4. Se l'AI scarta tutti i libri perché nessuno è davvero attinente, rispondi dicendo che non ci sono volumi specifici su questo argomento al momento.\n"
+        "5. Chiudi sempre con un saluto cordiale invitando l'utente in sede a Siracusa."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
+    # SALVAGENTE DI EMERGENZA (Se la rete salta)
     if not response or response.status_code != 200:
+        q_clean = normalize(user_message)
         parole_ricerca = [w for w in q_clean.split() if len(w) >= 3 and w not in STOPWORDS]
         linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca**:\n"]
         PAROLE_BANDITE_MANGA = ["esopo", "aesopus", "favole", "biagi", "mastroianni", "brecht", "barbaro"]
@@ -250,14 +236,12 @@ def ask_gemini(user_message, testi_libri):
                     continue
             if any(p in testo_norm for p in parole_ricerca) or "fumett" in testo_norm or "giallo" in testo_norm or "cucin" in testo_norm:
                 linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-                info_libro = " - ".join(linee[:2])
+                info_libro = " - ".join(linee[:3])
                 linee_emergenza.append(f"• {info_libro}")
                 contatore += 1
-            if contatore >= 12:
+            if contatore >= 8:
                 break
-        if contatore == 0:
-            return "Siamo spiacenti, nessun volume corrisponde alla ricerca corrente."
-        linee_emergenza.append("\n_Nota: Per consultare i volumi, ti aspettiamo in sede a Siracusa._")
+        linee_emergenza.append("\n_Nota: Ti aspettiamo in sede a Siracusa per consultare il catalogo completo._")
         return "\n".join(linee_emergenza)
             
     try:
