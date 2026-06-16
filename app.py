@@ -33,8 +33,8 @@ STOPWORDS = {
 TEMI_ESPANSI = {
     "cucin": ["cucin", "ricett", "gastronom", "diet", "piatt", "aliment", "mangiare", "artusi"],
     "teatr": ["teatr", "commedia", "tragedia", "dramma", "pirandello", "goldoni", "shakespeare"],
-    "amor": ["steel", "casati", "modignani", "sparks", "rosa", "romance", "allende", "passione", "sentiment"],
-    "rosa": ["steel", "casati", "modignani", "sparks", "rosa", "romance", "allende", "passione", "sentiment"],
+    "amor": ["modignani", "steel", "sparks", "allende", "rosa", "sentiment", "passione"],
+    "rosa": ["modignani", "steel", "sparks", "allende", "rosa", "sentiment", "passione"],
     "bullis": ["bullis", "bullo", "cyberbulli", "violenza", "scuola", "ragazzi"],
     "giallo": ["giallo", "gialli", "thriller", "poliziesc", "assassin", "delitto", "mistero", "christie", "camilleri"],
     "noir": ["noir", "poliziesco", "crimine", "indagine", "carlotto", "carofiglio", "indridason"],
@@ -110,9 +110,9 @@ def cerca_nel_db(query):
     parole_espanse = set()
     ricerca_tematica_attiva = False
     
-    # FORZATURA STRUTTURALE PER I ROMANZI ROSA / AMORE
+    # FORZATURA AD HOC: Se rileva intenzioni legate al genere Rosa/Amore
     if "amor" in q or "rosa" in q or "sentiment" in q:
-        parole_espanse.update(["steel", "casati", "modignani", "sparks", "allende", "rosa", "amor"])
+        parole_espanse.update(["modignani", "steel", "sparks", "allende", "rosa", "amor", "passione"])
         ricerca_tematica_attiva = True
     else:
         for parola in parole_chiave:
@@ -131,9 +131,10 @@ def cerca_nel_db(query):
     cursor = conn.cursor()
     
     if ricerca_tematica_attiva:
+        # Usiamo OR per raccogliere sia i termini di genere che i cognomi chiave delle autrici
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri = [f"%{p}%" for p in parole_espanse]
-        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 35"
+        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 40"
     else:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
         parametri = [f"%{p}%" for p in parole_espanse]
@@ -149,12 +150,21 @@ def cerca_nel_db(query):
     libri_ordinati = []
     for testo_completo, testo_norm in righe:
         punteggio = 0
+        
+        # Super-bonus per spingere in alto le autrici rosa se l'utente cerca quel genere
+        if "amor" in q or "rosa" in q or "sentiment" in q:
+            if "modignani" in testo_norm or "steel" in testo_norm or "sparks" in testo_norm:
+                punteggio += 100  # Schizza in cima alla lista!
+            if "alberoni" in testo_norm or "saggi" in testo_norm:
+                punteggio -= 50   # Penalizziamo i saggi psicologici
+
         for pk in parole_chiave:
             if pk in testo_norm:
                 punteggio += 15
         for pe in parole_espanse:
             if pe in testo_norm:
                 punteggio += 2
+                
         libri_ordinati.append((punteggio, testo_completo))
         
     libri_ordinati.sort(key=lambda x: x[0], reverse=True)
@@ -177,7 +187,7 @@ def ask_gemini(user_message, testi_libri):
         return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento. Ti invitiamo a consultare il bibliotecario in sede per una ricerca più approfondita."
     
     context_list = []
-    for i, blocco in enumerate(testi_libri[:12]):
+    for i, blocco in enumerate(testi_libri[:15]): # Alzato a 15 candidati per dare più scelta all'AI
         context_list.append(f"CANDIDATO #{i+1}:\n{blocco}")
         
     context = "\n\n---\n\n".join(context_list)
@@ -187,11 +197,12 @@ def ask_gemini(user_message, testi_libri):
         f"L'utente cerca: '{user_message}'\n\n"
         f"Lista libri candidati dal database:\n\n{context}\n\n"
         "COMPITO E REGOLE RIGIDE:\n"
-        "1. Filtra con intelligenza i libri: Se l'utente cerca romanzi d'amore o rosa, includi ESCLUSIVAMENTE i romanzi sentimentali/rosa veri e propri (es. Danielle Steel, Sveva Casati Modignani, Nicholas Sparks, ecc.).\n"
-        "2. Scarta tassativamente i saggi di psicologia o sociologia (es. Francesco Alberoni, saggi sull'innamoramento) e scarta i fumetti o i classici totalmente fuori target.\n"
-        "3. Per ogni romanzo coerente trovato, mostra un elenco puntato usando questo preciso formato:\n"
+        "1. Filtra con intelligenza i libri: Se l'utente cerca romanzi d'amore o rosa, includi i romanzi sentimentali veri e propri (es. Sveva Casati Modignani, Danielle Steel, Nicholas Sparks, o storie d'amore narrative).\n"
+        "2. Escludi tassativamente i saggi scientifici, psicologici o sociologici (es. Francesco Alberoni, saggi sull'innamoramento) se l'utente chiede esplicitamente romanzi.\n"
+        "3. Seleziona un massimo di 6-8 volumi tra i più calzanti.\n"
+        "4. Per ogni romanzo coerente trovato, mostra un elenco puntato usando questo preciso formato:\n"
         "   * **Titolo del Libro**, Autore - Collocazione\n"
-        "4. IMPORTANTE: Aggiungi SEMPRE alla fine dell'elenco una nota fissa che specifichi che la risposta è parziale e che invita l'utente a consultare il bibliotecario in sede a Siracusa per ulteriori dettagli o informazioni complete."
+        "5. IMPORTANTE: Aggiungi SEMPRE alla fine dell'elenco una nota fissa che specifichi che la risposta è parziale e che invita l'utente a consultare il bibliotecario in sede a Siracusa per ulteriori dettagli o informazioni complete."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
@@ -206,9 +217,9 @@ def ask_gemini(user_message, testi_libri):
         for blocco in testi_libri:
             testo_norm = normalize(blocco)
             if "alberoni" in testo_norm and ("amor" in q_clean or "rosa" in q_clean):
-                continue  # Escludiamo preventivamente Alberoni in emergenza rosa
+                continue
                 
-            if any(p in testo_norm for p in parole_ricerca) or "steel" in testo_norm or "casati" in testo_norm:
+            if any(p in testo_norm for p in parole_ricerca) or "modignani" in testo_norm or "steel" in testo_norm:
                 linee = [l.strip() for l in blocco.split('\n') if l.strip()]
                 info_libro = " - ".join(linee[:3])
                 linee_emergenza.append(f"• {info_libro}")
@@ -221,7 +232,6 @@ def ask_gemini(user_message, testi_libri):
     try:
         data = response.json()
         output_ai = data['candidates'][0]['content']['parts'][0]['text']
-        # Se l'AI si è dimenticata della nota parziale, gliela appendiamo noi di sicurezza
         if "bibliotecario" not in output_ai.lower():
             output_ai += "\n\n_Nota: Questa risposta è parziale. Si invita a consultare il bibliotecario in sede per ulteriori notizie e informazioni complete._"
         return output_ai
