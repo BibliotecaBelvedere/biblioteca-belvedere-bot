@@ -13,7 +13,6 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 DB_FILE = "catalogo.db"
 
-# Teniamo solo pochissime stopword strutturali, il resto lo lasciamo per dare contesto alla ricerca
 STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova'}
 
 def normalize(s):
@@ -64,63 +63,83 @@ def cerca_nel_db(query):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Se la ricerca è generica o legata a un macro-genere, estraiamo un campione molto ampio e variegato dal catalogo
-    # per permettere all'IA di fare collegamenti intelligenti e pescare gli autori giusti.
-    if any(g in q for g in ["giallo", "gialli", "rosa", "amor", "bullis", "bullo", "cucin", "noir", "storia"]):
-        # Creiamo una mega-query che intercetta i termini cardine del genere o potenziali autori correlati nella cultura dell'IA
+    # Se la ricerca tocca macro-temi, carichiamo un set generoso ma ottimizzato (fino a 120 libri)
+    if any(g in q for g in ["giallo", "gialli", "rosa", "amor", "bullis", "bullo", "cucin", "noir", "storia", "scuola"]):
         cursor.execute("""
             SELECT testo_completo FROM libri 
             WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' 
                OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%'
                OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%modignani%' OR testo_normalizzato LIKE '%steel%'
-               OR testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%'
+               OR testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%violenz%'
                OR testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%'
-               OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%carlotto%' OR testo_normalizzato LIKE '%carofiglio%'
-            LIMIT 250
+               OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%carlotto%'
+            LIMIT 120
         """)
     else:
-        # Ricerca standard flessibile per parole in OR per non perdere nulla, l'IA farà la selezione di qualità
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 150", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 80", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri LIMIT 100")
+            cursor.execute("SELECT testo_completo FROM libri LIMIT 50")
             
     righe = cursor.fetchall()
     conn.close()
     return [r[0] for r in righe]
 
 def ask_gemini(user_message, testi_libri):
-    # Uniamo i testi trovati creando la base dati per l'IA
-    context = "\n\n---\n\n".join([f"SCHEDA CATALOGO BIENNALE:\n{b}" for b in testi_libri])
+    if not testi_libri:
+        return "Gentile utente, non ho trovato corrispondenze dirette nel catalogo elettronico. Ti invitiamo a rivolgerti al bibliotecario in sede a Siracusa per una ricerca approfondita tra i volumi fisici."
+
+    # OTTIMIZZAZIONE ESSENZIALE: Estraiamo solo le informazioni identificative di ogni libro
+    # eliminando la spazzatura tipografica (misure in cm, codici a barre lunghi, info di editing)
+    elenco_snello = []
+    for blocco in testi_libri:
+        linee = [l.strip() for l in blocco.split('\n') if l.strip()]
+        if linee:
+            # Prendiamo solo le prime 2 o 3 righe significative del blocco (Titolo, Autore, Note essenziali)
+            estratto = " / ".join(linee[:3])
+            elenco_snello.append(estratto)
+            
+    context = "\n".join([f"- {item}" for item in elenco_snello])
     
     prompt_completo = (
-        "Sei un Bibliotecario Esperto, colto e raffinato della Biblioteca Belvedere di Siracusa.\n"
-        "Il tuo compito NON è fare una ricerca testuale stupida, ma offrire una CONSULENZA BIBLIOGRAFICA RAGIONATA E CRITICA.\n\n"
-        f"L'utente ti chiede: '{user_message}'\n\n"
-        "ISTRUZIONI OPERATIVE RIGIDE:\n"
-        "1. Usa la tua cultura letteraria: Se l'utente ti chiede un genere (es. gialli, romanzi rosa, libri sul bullismo), analizza i dati del catalogo qui sotto, riconosci gli autori pertinenti (es. se chiede gialli, individua Georges Simenon o Agatha Christie anche se la parola 'giallo' non appare nella loro scheda) e seleziona le opere migliori presenti.\n"
-        "2. Formula una vera e propria 'Bibliografia Ragionata': introduci brevemente il tema o l'autore con competenza, dopodiché presenta i libri selezionati inserendo per ciascuno un breve commento critico del perché è rilevante.\n"
-        "3. Se l'utente cerca un libro specifico che NON è presente nel catalogo fornito, usa le tue conoscenze per spiegare di cosa tratta il libro cercato e proponi subito delle alternative valide e affini realmente presenti nel catalogo.\n"
-        "4. Per i libri consigliati che trovi nel catalogo, mostra chiaramente il Titolo, l'Autore e la Collocazione (es. I 23b-2).\n"
-        "5. Adotta un tono accogliente, professionale e colto. Concludi sempre ricordando che la risposta è parziale e che il Bibliotecario in sede a Siracusa è a disposizione per ulteriori notizie, approfondimenti e per consultare il catalogo completo.\n\n"
-        f"Ecco i dati del catalogo a tua disposizione su cui lavorare:\n{context}"
+        "Sei il Bibliotecario Virtuale della Biblioteca Belvedere di Siracusa, una guida colta e appassionata di letteratura.\n"
+        "Il tuo scopo è fornire una CONSULENZA BIBLIOGRAFICA RAGIONATA E CRITICA basandoti sui libri realmente disponibili.\n\n"
+        f"L'utente desidera: '{user_message}'\n\n"
+        "ISTRUZIONI IMPORTANTI:\n"
+        "1. Usa la tua cultura enciclopedica per raggruppare i libri dell'elenco sottostante per genere o autore pertinente (es. se l'utente chiede 'gialli', riconosci autonomamente Georges Simenon, Agatha Christie o Camilleri presenti nella lista).\n"
+        "2. Non fare un elenco freddo. Scrivi una risposta discorsiva: introduci l'argomento e presenta una selezione dei 4-7 libri più calzanti della lista, aggiungendo per ognuno un breve commento sul perché vale la pena leggerlo.\n"
+        "3. Per ogni libro citato inserisci chiaramente Titolo, Autore e la sua Collocazione (es. I 23b-2 o 29-4) che leggi nell'elenco.\n"
+        "4. Se l'utente nomina un libro o un autore famoso che NON è presente nell'elenco, spiega brevemente cos'è usando le tue conoscenze globali, ma proponi subito come alternativa i libri affini che sono invece presenti nel catalogo.\n"
+        "5. Concludi sempre ricordando che la risposta è parziale e invita l'utente a consultare il bibliotecario in sede a Siracusa per ulteriori notizie, consigli personalizzati e per esplorare l'intero catalogo.\n\n"
+        f"Ecco l'elenco dei libri disponibili in biblioteca su cui costruire la tua recensione:\n{context}"
     )
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json={"contents": [{"role": "user", "parts": [{"text": prompt_completo}]}], "generationConfig": {"temperature": 0.4}}, timeout=15)
+        response = requests.post(
+            url, 
+            headers={"Content-Type": "application/json"}, 
+            json={"contents": [{"role": "user", "parts": [{"text": prompt_completo}]}], "generationConfig": {"temperature": 0.4}}, 
+            timeout=15
+        )
         
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
     except:
         pass
 
-    return "Gentile utente, si è verificato un rallentamento nel caricamento dei dati culturali. Ti invitiamo a rivolgerti direttamente al bibliotecario in sede alla Biblioteca Belvedere di Siracusa per ricevere una bibliografia ragionata e completa sul tema richiesto."
+    # EMERGENZA ELEGANTE IN CASO DI TIMEOUT INTERNO DELL'API
+    linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Servizio Bibliografico**:\n", "Gentile utente, la selezione per questa tematica è molto ampia. Ecco i primi titoli storici individuati nel nostro catalogo:\n"]
+    for blocco in testi_libri[:5]:
+        linee = [l.strip() for l in blocco.split('\n') if l.strip()]
+        linee_emergenza.append(f"• {' - '.join(linee[:2])}")
+    linee_emergenza.append("\n_Nota: Questa selezione è parziale. Ti invitiamo in sede a Siracusa dove il Bibliotecario potrà comporre per te una bibliografia ragionata e completa._")
+    return "\n".join(linee_emergenza)
 
 def send_telegram(chat_id, text):
-    try: requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}, timeout=10)
+    try: requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
     except: pass
 
 def async_process_request(chat_id, text):
@@ -129,7 +148,7 @@ def async_process_request(chat_id, text):
         reply = ask_gemini(text, libri_trovati)
         send_telegram(chat_id, reply)
     except:
-        send_telegram(chat_id, "Gentile utente, il sistema ha riscontrato un errore. Il bibliotecario in sede a Siracusa è a tua completa disposizione.")
+        send_telegram(chat_id, "Gentile utente, il sistema ha riscontrato un imprevisto. Il bibliotecario in sede a Siracusa rimane a tua completa disposizione.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
@@ -139,7 +158,7 @@ def telegram_webhook():
             chat_id = data["message"]["chat"]["id"]
             text = data["message"].get("text", "").strip()
             if text == "/start":
-                send_telegram(chat_id, "Benvenuto al servizio di consulenza bibliografica della Biblioteca Belvedere! Chiedimi pure consigli di lettura, bibliografie tematiche o informazioni sugli autori presenti nel nostro catalogo.")
+                send_telegram(chat_id, "Benvenuto al servizio di consulenza bibliografica della Biblioteca Belvedere! Chiedimi consigli di lettura, percorsi tematici o bibliografie d'autore.")
             elif chat_id and text:
                 Thread(target=async_process_request, args=(chat_id, text)).start()
     except: pass
@@ -151,7 +170,7 @@ def setup():
     try:
         render_url = request.host_url.rstrip("/")
         requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
-        tele_res = "Webhook configurato correttamente."
+        tele_res = "Webhook configurato ed attivato."
     except Exception as e: tele_res = str(e)
     return jsonify({"status": res, "telegram_response": tele_res})
 
