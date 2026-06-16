@@ -30,18 +30,19 @@ STOPWORDS = {
     'mostrami','elenco','lista','autori','autore','volumi','volume','titoli','titolo'
 }
 
+# Mappatura tematica solida per evitare falsi positivi (es. Annarosa o Asor Rosa)
 TEMI_ESPANSI = {
     "cucin": ["cucin", "ricett", "gastronom", "diet", "piatt", "aliment", "mangiare", "artusi"],
     "teatr": ["teatr", "commedia", "tragedia", "dramma", "pirandello", "goldoni", "shakespeare"],
-    "amor": ["modignani", "steel", "sparks", "allende", "rosa", "sentiment", "passione"],
-    "rosa": ["modignani", "steel", "sparks", "allende", "rosa", "sentiment", "passione"],
+    "amor": ["modignani", "steel", "sparks", "allende", "romance", "passion"],
+    "rosa": ["modignani", "steel", "sparks", "allende", "romance", "passion"],
     "bullis": ["bullis", "bullo", "cyberbulli", "violenza", "scuola", "ragazzi"],
     "giallo": ["giallo", "gialli", "thriller", "poliziesc", "assassin", "delitto", "mistero", "christie", "camilleri"],
     "noir": ["noir", "poliziesco", "crimine", "indagine", "carlotto", "carofiglio", "indridason"],
     "avventur": ["avventur", "azione", "esplorazione", "viaggio", "salgari", "verne"],
     "fantasy": ["fantasy", "fantastico", "magia", "drago", "tolkien", "rowling", "martin"],
-    "manga": ["manga", "fumetto", "fumetti", "anime", "giappone", "shinzo", "rowell"],
-    "fumett": ["fumett", "manga", "albo", "strisce", "vignette", "zerocalcare", "tex"]
+    "manga": ["manga", "fumetto", "fumetti", "giappone", "shinzo"],
+    "fumett": ["fumett", "manga", "albo", "strisce", "zerocalcare", "tex"]
 }
 
 def normalize(s):
@@ -61,7 +62,7 @@ def inizializza_database():
             break
             
     if not file_reale:
-        return f"ERRORE: Il file catalogo.txt NON esiste. Trovati: {file_presenti}"
+        return f"ERRORE: Il file catalogo.txt NON esiste."
 
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -102,80 +103,72 @@ def inizializza_database():
 
 def cerca_nel_db(query):
     q = normalize(query)
+    # Estraiamo le parole pulite ignorando le stopword
     parole_chiave = [w for w in q.split() if len(w) >= 2 and w not in STOPWORDS]
     
     if not parole_chiave:
         return []
 
-    parole_espanse = set()
-    ricerca_tematica_attiva = False
-    
-    # FORZATURA AD HOC: Se rileva intenzioni legate al genere Rosa/Amore
-    if "amor" in q or "rosa" in q or "sentiment" in q:
-        parole_espanse.update(["modignani", "steel", "sparks", "allende", "rosa", "amor", "passione"])
-        ricerca_tematica_attiva = True
-    else:
-        for parola in parole_chiave:
-            trovato_tema = False
-            for radice, sinonimi in TEMI_ESPANSI.items():
-                if radice in parola or parola in radice:
-                    parole_espanse.update(sinonimi)
-                    ricerca_tematica_attiva = True
-                    trovato_tema = True
-                    break
-            if not trovato_tema:
-                parole_espanse.add(parola)
+    termini_ricerca = set(parole_chiave)
+    genere_rosa_attivo = any(k in q for k in ["rosa", "amor", "sentiment"])
 
-    parole_espanse = list(parole_espanse)
+    # Espansione dei termini in base ai macro-temi
+    for pk in parole_chiave:
+        for radice, sinonimi in TEMI_ESPANSI.items():
+            if radice in pk or pk in radice:
+                termini_ricerca.update(sinonimi)
+
+    termini_ricerca = list(termini_ricerca)
+    
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    if ricerca_tematica_attiva:
-        # Usiamo OR per raccogliere sia i termini di genere che i cognomi chiave delle autrici
-        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
-        parametri = [f"%{p}%" for p in parole_espanse]
-        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 40"
-    else:
-        condizioni = ["testo_normalizzato LIKE ?" for _ in parole_espanse]
-        parametri = [f"%{p}%" for p in parole_espanse]
-        sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' AND '.join(condizioni)} LIMIT 20"
-        
-    cursor.execute(sql_query, list(parametri))
+    # Costruiamo una query SQL solida basata su OR per i temi espansi
+    condizioni = ["testo_normalizzato LIKE ?" for _ in termini_ricerca]
+    parametri = [f"%{t}%" for t in termini_ricerca]
+    
+    sql_query = f"SELECT testo_completo, testo_normalizzato FROM libri WHERE {' OR '.join(condizioni)} LIMIT 50"
+    cursor.execute(sql_query, parametri)
     righe = cursor.fetchall()
     conn.close()
     
-    if not righe:
-        return []
-
-    libri_ordinati = []
+    libri_filtrati = []
     for testo_completo, testo_norm in righe:
+        # Pulizia di sicurezza: scartiamo i blocchi "orfani" cortissimi (es. solo il nome dell'autore senza titoli)
+        if len(testo_completo.strip()) < 35:
+            continue
+            
         punteggio = 0
         
-        # Super-bonus per spingere in alto le autrici rosa se l'utente cerca quel genere
-        if "amor" in q or "rosa" in q or "sentiment" in q:
-            if "modignani" in testo_norm or "steel" in testo_norm or "sparks" in testo_norm:
-                punteggio += 100  # Schizza in cima alla lista!
-            if "alberoni" in testo_norm or "saggi" in testo_norm:
-                punteggio -= 50   # Penalizziamo i saggi psicologici
+        # Filtro stringente anti-falsi positivi per il genere Rosa
+        if genere_rosa_attivo:
+            # Se trova le autrici reali diamo un bonus stratosferico
+            if any(a in testo_norm for a in ["modignani", "steel", "sparks", "allende"]):
+                punteggio += 200
+            # Se trova falsi positivi come Asor Rosa o saggistica medievale/psicologica, penalizziamo duramente
+            if "asor" in testo_norm or "alberoni" in testo_norm or "medioevo" in testo_norm:
+                punteggio -= 150
+            # Cerca la parola "rosa" isolata e non dentro "annarosa" o "mariarosa"
+            if re.search(r'\brosa\b', testo_norm):
+                punteggio += 30
 
+        # Punteggio standard basato sulle parole cercate dall'utente
         for pk in parole_chiave:
             if pk in testo_norm:
-                punteggio += 15
-        for pe in parole_espanse:
-            if pe in testo_norm:
-                punteggio += 2
+                punteggio += 20
                 
-        libri_ordinati.append((punteggio, testo_completo))
+        libri_filtrati.append((punteggio, testo_completo))
         
-    libri_ordinati.sort(key=lambda x: x[0], reverse=True)
-    return [libro[1] for libro in libri_ordinati]
+    # Ordiniamo per punteggio decrescente e restituiamo i migliori
+    libri_filtrati.sort(key=lambda x: x[0], reverse=True)
+    return [l[1] for l in libri_filtrati if l[0] >= 0]
 
 def call_gemini_api(model_name, prompt_text):
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
-            "generationConfig": {"temperature": 0.2}
+            "generationConfig": {"temperature": 0.1}
         }
         response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=12)
         return response
@@ -184,10 +177,10 @@ def call_gemini_api(model_name, prompt_text):
 
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
-        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde a questa richiesta al momento. Ti invitiamo a consultare il bibliotecario in sede per una ricerca più approfondita."
+        return "Mi dispiace, nessun volume nel nostro catalogo corrisponde esattamente a questa richiesta. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per una ricerca più approfondita."
     
     context_list = []
-    for i, blocco in enumerate(testi_libri[:15]): # Alzato a 15 candidati per dare più scelta all'AI
+    for i, blocco in enumerate(testi_libri[:15]):
         context_list.append(f"CANDIDATO #{i+1}:\n{blocco}")
         
     context = "\n\n---\n\n".join(context_list)
@@ -195,48 +188,37 @@ def ask_gemini(user_message, testi_libri):
     prompt_completo = (
         "Sei l'assistente virtuale ufficiale della Biblioteca Belvedere di Siracusa (SBS0CB).\n"
         f"L'utente cerca: '{user_message}'\n\n"
-        f"Lista libri candidati dal database:\n\n{context}\n\n"
-        "COMPITO E REGOLE RIGIDE:\n"
-        "1. Filtra con intelligenza i libri: Se l'utente cerca romanzi d'amore o rosa, includi i romanzi sentimentali veri e propri (es. Sveva Casati Modignani, Danielle Steel, Nicholas Sparks, o storie d'amore narrative).\n"
-        "2. Escludi tassativamente i saggi scientifici, psicologici o sociologici (es. Francesco Alberoni, saggi sull'innamoramento) se l'utente chiede esplicitamente romanzi.\n"
-        "3. Seleziona un massimo di 6-8 volumi tra i più calzanti.\n"
-        "4. Per ogni romanzo coerente trovato, mostra un elenco puntato usando questo preciso formato:\n"
+        f"Lista libri candidati estratti dal database:\n\n{context}\n\n"
+        "REGOLE DI SELEZIONE RIGIDE:\n"
+        "1. Se l'utente cerca 'romanzi rosa' o d'amore, includi SOLO romanzi narrativi sentimentali reali (es. Sveva Casati Modignani, Pearl Abraham se pertinente, ecc.).\n"
+        "2. Escludi tassativamente saggistica letteraria (es. Asor Rosa), saggi storici, libri per bambini o fumetti non pertinenti.\n"
+        "3. Se l'utente cerca 'bullismo', seleziona tutti i testi pertinenti estratti che parlano di bullismo, violenza tra ragazzi o disagio adolescenziale.\n"
+        "4. Genera un elenco puntato chiaro in questo formato:\n"
         "   * **Titolo del Libro**, Autore - Collocazione\n"
-        "5. IMPORTANTE: Aggiungi SEMPRE alla fine dell'elenco una nota fissa che specifichi che la risposta è parziale e che invita l'utente a consultare il bibliotecario in sede a Siracusa per ulteriori dettagli o informazioni complete."
+        "5. Concludi SEMPRE con una nota fissa che indichi che la risposta è parziale e invita a consultare il bibliotecario in sede a Siracusa per ulteriori informazioni."
     )
 
     response = call_gemini_api("gemini-2.5-flash", prompt_completo)
     
-    # EMERGENZA BLINDATA CON NOTA OBBLIGATORIA
+    # EMERGENZA RIGIDA IN CASO DI KO GENERALE
     if not response or response.status_code != 200:
-        q_clean = normalize(user_message)
-        parole_ricerca = [w for w in q_clean.split() if len(w) >= 3 and w not in STOPWORDS]
         linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Risultati Ricerca (Parziale)**:\n"]
-        contatore = 0
-        
-        for blocco in testi_libri:
-            testo_norm = normalize(blocco)
-            if "alberoni" in testo_norm and ("amor" in q_clean or "rosa" in q_clean):
-                continue
-                
-            if any(p in testo_norm for p in parole_ricerca) or "modignani" in testo_norm or "steel" in testo_norm:
-                linee = [l.strip() for l in blocco.split('\n') if l.strip()]
-                info_libro = " - ".join(linee[:3])
-                linee_emergenza.append(f"• {info_libro}")
-                contatore += 1
-            if contatore >= 8:
-                break
-        linee_emergenza.append("\n_Nota: Questa risposta è parziale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per ulteriori notizie, informazioni e per consultare il catalogo completo._")
+        for blocco in testi_libri[:6]:
+            linee = [l.strip() for l in blocco.split('\n') if l.strip()]
+            info_libro = " - ".join(linee[:3])
+            linee_emergenza.append(f"• {info_libro}")
+            
+        linee_emergenza.append("\n_Nota: Questa risposta è parziale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per ulteriori notizie e informazioni complete._")
         return "\n".join(linee_emergenza)
             
     try:
         data = response.json()
         output_ai = data['candidates'][0]['content']['parts'][0]['text']
         if "bibliotecario" not in output_ai.lower():
-            output_ai += "\n\n_Nota: Questa risposta è parziale. Si invita a consultare il bibliotecario in sede per ulteriori notizie e informazioni complete._"
+            output_ai += "\n\n_Nota: Questa risposta è parziale. Si invita a consultare il bibliotecario in sede a Siracusa per ulteriori notizie e informazioni complete._"
         return output_ai
     except:
-        return "Errore di lettura dei dati. Si invita a consultare il bibliotecario in sede a Siracusa."
+        return "Errore di elaborazione dei dati. Si invita a consultare il bibliotecario in sede a Siracusa."
 
 def send_telegram(chat_id, text):
     try:
@@ -250,7 +232,7 @@ def async_process_request(chat_id, text):
         reply = ask_gemini(text, libri_trovati)
         send_telegram(chat_id, reply)
     except:
-        send_telegram(chat_id, "Si è verificato un errore. Consultare il bibliotecario in sede.")
+        send_telegram(chat_id, "Si è verificato un errore di sistema. Consultare il bibliotecario in sede.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
