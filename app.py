@@ -53,12 +53,14 @@ def inizializza_database():
         cursor.execute('CREATE TABLE IF NOT EXISTS libri (id INTEGER PRIMARY KEY AUTOINCREMENT, testo_completo TEXT, testo_normalizzato TEXT)')
         cursor.execute("DELETE FROM libri")
         
+        # VERIFICATO: Variabile rigorosamente in italiano 'contenuto'
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenido.split("[nd]")
+        # VERIFICATO: Split eseguito su 'contenuto'
+        pezzi_raw = contenuto.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenido.split("\n\n")
+            pezzi_raw = contenuto.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -79,7 +81,6 @@ def analizza_e_cerca(query_utente):
     q = normalize(query_utente)
     parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
     
-    # 1. Identificazione macro-generi tematici (Richiedono l'intervento dell'IA)
     is_giallo = any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller"])
     is_rosa = any(g in q for g in ["rosa", "amor", "sentiment", "romant"])
     is_bullismo = any(g in q for g in ["bullis", "bullo", "violenz", "scuola", "adolescen"])
@@ -91,7 +92,6 @@ def analizza_e_cerca(query_utente):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Esecuzione query in base al contesto
     if is_giallo:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 15")
     elif is_rosa:
@@ -103,7 +103,6 @@ def analizza_e_cerca(query_utente):
     elif is_territorio:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 15")
     else:
-        # Ricerca specifica per autore o titolo (es: vittorini, umberto eco)
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
@@ -118,7 +117,6 @@ def analizza_e_cerca(query_utente):
     return testi_libri, is_tematica_generica
 
 def genera_risposta_diretta(elenco_libri):
-    """Genera all'istante una risposta strutturata senza passare da Gemini"""
     if not elenco_libri:
         return "Gentile utente, non ho trovato volumi corrispondenti a questa specifica ricerca nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per verificare gli scaffali cartacei."
         
@@ -198,10 +196,8 @@ def async_process_request(chat_id, text):
         libri_trovati, richiede_ai = analizza_e_cerca(text)
         
         if richiede_ai and libri_trovati:
-            # È una ricerca astratta/ragionata -> Chiediamo a Gemini
             reply = ask_gemini(text, libri_trovati)
         else:
-            # È una ricerca secca per Autore o Titolo (es: Vittorini) -> Risposta fulminea dal database
             reply = genera_risposta_diretta(libri_trovati)
             
         send_telegram(chat_id, reply)
