@@ -14,7 +14,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 DB_FILE = "catalogo.db"
 
-STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova'}
+STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova', 'mi', 'dai', 'libri', 'sul', 'sui', 'di', 'cerchi'}
 
 def normalize(s):
     s = str(s).lower().strip()
@@ -29,7 +29,6 @@ def estrai_essenziale_libro(testo_blocco):
     testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
     
-    # Taglio drastico e pulito per non appesantire l'IA
     testo_pulito = re.split(r'\d+\s+p\b', testo_pulito)[0]
     testo_pulito = re.split(r'-\s+ISBN\b', testo_pulito)[0]
     testo_pulito = re.split(r';\s+\d+\s+cm', testo_pulito)[0]
@@ -86,7 +85,6 @@ def cerca_nel_db(query):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Torniamo a dare un buon margine di scelta a Gemini (20 libri)
     if is_giallo:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 20")
     elif is_rosa:
@@ -96,12 +94,14 @@ def cerca_nel_db(query):
     elif is_cucina:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 20")
     else:
+        # Ricerca generica per parole singole ultra-tollerante
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
             cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 20", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri LIMIT 20")
+            # Se l'utente inserisce solo stopword, cerchiamo la query intera purificata
+            cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE ? LIMIT 20", (f"%{q}%",))
             
     righe = cursor.fetchall()
     conn.close()
@@ -109,7 +109,7 @@ def cerca_nel_db(query):
 
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
-        return "Gentile utente, non ho trovato volumi corrispondenti a questa tematica nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per verificare gli scaffali fisici."
+        return "Gentile utente, non ho trovato volumi corrispondenti a questa specifica ricerca nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per verificare gli scaffali cartacei."
 
     elenco_essenziale = []
     for blocco in testi_libri:
@@ -131,7 +131,6 @@ def ask_gemini(user_message, testi_libri):
         "4. Includi SEMPRE alla fine una nota che indica che la risposta è parziale e invita a consultare il bibliotecario in sede a Siracusa per informazioni complete e approfondimenti."
     )
 
-    # Configurazione di ripristino per Gemini 2.5 con sblocco totale dei filtri di sicurezza (Safety Settings)
     payload = {
         "contents": [{
             "role": "user",
@@ -161,7 +160,6 @@ def ask_gemini(user_message, testi_libri):
     except:
         pass
 
-    # Ruota di scorta se c'è un blocco di rete temporaneo
     linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Selezione Bibliografica**:\n", "Gentile utente, ecco i principali titoli attinenti individuati nel catalogo:\n"]
     for item in elenco_essenziale[:6]:
         linee_emergenza.append(f"• {item}")
@@ -178,7 +176,7 @@ def async_process_request(chat_id, text):
         reply = ask_gemini(text, libri_trovati)
         send_telegram(chat_id, reply)
     except:
-        send_telegram(chat_id, "Servizio momentaneamente in manutenzione. Il bibliotecario in sede a Siracusa rimane a disposizione per qualsiasi ricerca.")
+        send_telegram(chat_id, "Servizio di consultazione online attivo. Se non ricevi risposta immediata, il bibliotecario in sede a Siracusa rimane a completa disposizione.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
