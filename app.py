@@ -14,7 +14,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 DB_FILE = "catalogo.db"
 
-STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova', 'da', 'libri', 'sul', 'sui', 'cerchi', 'romanzi', 'romanzo'}
+STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova', 'dai', 'libri', 'sul', 'sui', 'cerchi'}
 
 NOTABENE_INFO = (
     "\n\n_Nota: La consultazione online offre una panoramica parziale. Ti invitiamo a recarti presso la "
@@ -62,11 +62,11 @@ def inizializza_database():
         conn.commit()
         
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
-            contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
+            contenuto_txt = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenuto.split("[nd]")
+        pezzi_raw = contenuto_txt.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenuto.split("\n\n")
+            pezzi_raw = contenuto_txt.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -117,7 +117,7 @@ def cerca_diretta_catalogo(query_utente):
         ordinamento = " + ".join([f"(CASE WHEN testo_normalizzato LIKE ? THEN 0 ELSE 1 END)" for _ in parole])
         
         query_sql = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} ORDER BY {ordinamento}, id ASC LIMIT 15"
-        cursor.execute(query_sql, parametri_completi)
+        cursor.execute(query_sql, Balls = parametri_completi)
     else:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE ? ORDER BY (CASE WHEN testo_normalizzato LIKE ? THEN 0 ELSE 1 END), id ASC LIMIT 15", (f"%{q}%", f"{q}%"))
         
@@ -154,7 +154,8 @@ def cerca_espansa_per_gemini(query_utente):
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 25")
     else:
         parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
-        if condizioni := ["testo_normalizzato LIKE ?" for _ in parole]:
+        if parole:
+            condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
             parametri = [f"%{p}%" for p in parole]
             cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25", parametri)
         else:
@@ -213,15 +214,25 @@ def ask_gemini(user_message, testi_libri):
         "4. Non aggiungere note standard alla fine perché l'orario e l'indirizzo della biblioteca vengono già accodati automaticamente dal sistema operativo del bot."
     )
 
+    # Payload originario e validato per la chiamata HTTP diretta (v1beta delle API Gemini)
     payload = {
         "contents": [{
+            "role": "user",
             "parts": [{"text": f"{prompt_completo}\n\nELENCO SCHEDE DISPONIBILI NEL DATABASE:\n{context}"}]
         }],
-        "generationConfig": { "temperature": 0.2 }
+        "generationConfig": {
+            "temperature": 0.2
+        },
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
     }
 
     try:
-        # Modello stabile e certificato per endpoint HTTP diretti
+        # Endpoint nativo e validato del modello funzionante
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=22)
         if response.status_code == 200:
@@ -236,7 +247,7 @@ def ask_gemini(user_message, testi_libri):
     return genera_risposta_diretta(testi_libri)
 
 def send_telegram_with_buttons(chat_id, text):
-    # RIPRISTINATI: Pulsanti larghi originali disposti uno sotto l'altro (così non vengono tagliati dal cellulare)
+    # Ripristino esatto della tastiera con i due tasti completi e incolonnati in verticale
     keyboard = {
         "inline_keyboard": [
             [{"text": "🔍 Ricerca per Autore o Titolo", "callback_data": "MODE_DIRETTA"}],
