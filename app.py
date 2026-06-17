@@ -29,7 +29,7 @@ def estrai_essenziale_libro(testo_blocco):
     testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
     
-    # Taglio drastico della spazzatura per velocizzare l'IA
+    # Taglio drastico delle informazioni tipografiche per non appesantire il prompt
     testo_pulito = re.split(r'\d+\s+p\b', testo_pulito)[0]
     testo_pulito = re.split(r'-\s+ISBN\b', testo_pulito)[0]
     testo_pulito = re.split(r';\s+\d+\s+cm', testo_pulito)[0]
@@ -55,9 +55,10 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenido.split("[nd]")
+        # CORREZIONE COMPLETA: 'contenuto' con la 'u' ovunque
+        pezzi_raw = contenuto.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenido.split("\n\n")
+            pezzi_raw = contenuto.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -86,7 +87,7 @@ def cerca_nel_db(query):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # OTTIMIZZAZIONE: Abbassiamo il LIMIT a 12/15 elementi per non far andare mai l'IA in timeout
+    # LIMIT ottimizzati a 12/15 elementi per evitare timeout di Gemini
     if is_giallo:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 12")
     elif is_rosa:
