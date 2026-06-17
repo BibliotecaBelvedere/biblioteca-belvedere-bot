@@ -29,14 +29,12 @@ def estrai_essenziale_libro(testo_blocco):
     testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
     
-    # Taglio posizionale basato sulle info tipografiche
     for pattern in [r'\d+\s+p\b', r';\s+\d+\s+cm', r'-\s+ISBN', r'\.\s+-\s+VIII']:
         match = re.search(pattern, testo_pulito)
         if match:
             testo_pulito = testo_pulito[:match.start()]
             break
             
-    # Pulizia dei rimasugli di punteggiatura alla fine del troncamento
     testo_pulito = testo_pulito.strip()
     testo_pulito = re.sub(r'[\s\.\,\-\:\/]+$', '', testo_pulito)
     testo_pulito = testo_pulito.replace(' - . -', '').replace('\\', '/').replace('"', "'")
@@ -57,12 +55,14 @@ def inizializza_database():
         cursor.execute('CREATE TABLE IF NOT EXISTS libri (id INTEGER PRIMARY KEY AUTOINCREMENT, testo_completo TEXT, testo_normalizzato TEXT)')
         cursor.execute("DELETE FROM libri")
         
+        # 1. Apertura file usando RIGOROSAMENTE 'contenuto'
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenido.split("[nd]")
+        # 2. Split eseguito RIGOROSAMENTE su 'contenuto' (Verificato!)
+        pezzi_raw = contenuto.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenido.split("\n\n")
+            pezzi_raw = contenuto.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -126,7 +126,7 @@ def ask_gemini(user_message, testi_libri):
     
     prompt_completo = (
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
-        "Il tuo compito è formulare una breve ed elegante RISPOSTA DISCORSIVA E CONSULENZIALE basandoti sui libri forniti nell'elenco in basso.\n\n"
+        "Il tuo scopo è formulare una breve ed elegante RISPOSTA DISCORSIVA E CONSULENZIALE basandoti sui libri forniti nell'elenco in basso.\n\n"
         f"L'utente richiede: '{user_message}'\n\n"
         "REGOLE DI SCRITTURA:\n"
         "1. Offri un testo fluido, accogliente e da bibliotecario. Introduci l'argomento ed elenca i libri rilevanti estratti dalla lista.\n"
@@ -135,7 +135,6 @@ def ask_gemini(user_message, testi_libri):
         "4. Concludi sempre invitando l'utente in sede a Siracusa per consultare il bibliotecario e visionare il catalogo completo."
     )
 
-    # Payload con struttura standard compatibile al 100% con le API v1
     payload = {
         "contents": [{
             "role": "user",
@@ -147,7 +146,6 @@ def ask_gemini(user_message, testi_libri):
     }
 
     try:
-        # Usiamo l'endpoint v1 stabile con il modello 1.5-flash
         url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=25)
         
@@ -160,7 +158,6 @@ def ask_gemini(user_message, testi_libri):
     except:
         pass
 
-    # Ripiego di emergenza se Google restituisce un errore di rete o di quota
     linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Selezione Bibliografica**:\n", "Gentile utente, ecco i principali titoli attinenti individuati nel catalogo:\n"]
     for item in elenco_essenziale[:6]:
         linee_emergenza.append(f"• {item}")
