@@ -53,14 +53,12 @@ def inizializza_database():
         cursor.execute('CREATE TABLE IF NOT EXISTS libri (id INTEGER PRIMARY KEY AUTOINCREMENT, testo_completo TEXT, testo_normalizzato TEXT)')
         cursor.execute("DELETE FROM libri")
         
-        # VERIFICATO: Variabile rigorosamente in italiano 'contenuto'
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        # VERIFICATO: Split eseguito su 'contenuto'
-        pezzi_raw = contenuto.split("[nd]")
+        pezzi_raw = contenido.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenuto.split("\n\n")
+            pezzi_raw = contenido.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -81,28 +79,31 @@ def analizza_e_cerca(query_utente):
     q = normalize(query_utente)
     parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
     
-    is_giallo = any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller"])
-    is_rosa = any(g in q for g in ["rosa", "amor", "sentiment", "romant"])
-    is_bullismo = any(g in q for g in ["bullis", "bullo", "violenz", "scuola", "adolescen"])
-    is_cucina = "cucin" in q or "ricett" in q or "mangiar" in q
-    is_territorio = any(g in q for g in ["territorio", "sicilia", "siracusa", "locale", "tradizion"])
+    # Rilevamento potenziato e iper-sensibile dei macro-generi tematici
+    is_giallo = any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller", "assass"])
+    is_rosa = any(g in q for g in ["rosa", "amor", "sentiment", "romant", "relazion"])
+    is_bullismo = any(g in q for g in ["bullis", "bullo", "prevarica", "scuola", "adolescen", "ragazzi"])
+    is_cucina = any(g in q for g in ["cucin", "ricett", "mangiar", "gastronom", "piatti"])
+    is_territorio = any(g in q for g in ["territorio", "sicilia", "siracusa", "locale", "tradizion", "storia locale"])
     
     is_tematica_generica = is_giallo or is_rosa or is_bullismo or is_cucina or is_territorio
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
+    # Se è una tematica generica, allarghiamo le maglie del DB per dare più materiale possibile a Gemini
     if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 15")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 25")
     elif is_rosa:
-        cursor.execute("SELECT testo_completo FROM libri WHERE (testo_normalizzato LIKE '% romanzo %' AND testo_normalizzato LIKE '% amor %') OR testo_normalizzato LIKE '% modignani %' OR testo_normalizzato LIKE '% steel %' OR testo_normalizzato LIKE '% sparks %' OR testo_normalizzato LIKE '% romanzo rosa %' LIMIT 15")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%romanzo%' OR testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%modignani%' OR testo_normalizzato LIKE '%steel%' LIMIT 25")
     elif is_bullismo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 15")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' OR testo_normalizzato LIKE '%ragazzi%' LIMIT 25")
     elif is_cucina:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 15")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 25")
     elif is_territorio:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 15")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 25")
     else:
+        # RICERCA SECCA (Autore/Titolo esatto: es. Vittorini)
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
@@ -151,12 +152,12 @@ def ask_gemini(user_message, testi_libri):
     prompt_completo = (
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
         "Il tuo scopo è formulare una breve, colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA basandoti sui libri forniti nell'elenco in basso.\n\n"
-        f"L'utente richiede: '{user_message}'\n\n"
+        f"L'utente richiede informazioni su: '{user_message}'\n\n"
         "REGOLE TASSATIVE DI SCRITTURA:\n"
-        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più rilevanti estratti dalla lista.\n"
-        "2. Per ogni libro consigliato estrai chiaramente Titolo, Autore e Collocazione leggendoli dai dati forniti.\n"
-        "3. Formula la risposta con uno stile professionale ed editoriale. Se un libro dell'elenco ti sembra fuori tema (un intruso), ignoralo e non inserirlo nella selezione.\n"
-        "4. Includi SEMPRE alla fine una nota che indica che la risposta è parziale e invita a consultare il bibliotecario in sede a Siracusa per informazioni complete e approfondimenti."
+        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più attinenti estratti dalla lista.\n"
+        "2. Per ogni libro consigliato specifica chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati forniti.\n"
+        "3. Formula la risposta con uno stile professionale ed editoriale. Se un libro dell'elenco ti sembra totalmente fuori tema rispetto alla richiesta del lettore, ignoralo.\n"
+        "4. Includi SEMPRE alla fine una nota discorsiva che indica che la risposta è parziale e invita a consultare il bibliotecario in sede a Siracusa per informazioni complete e approfondimenti."
     )
 
     payload = {
@@ -196,8 +197,10 @@ def async_process_request(chat_id, text):
         libri_trovati, richiede_ai = analizza_e_cerca(text)
         
         if richiede_ai and libri_trovati:
+            # Se l'argomento è concettuale o di genere, interviene Gemini
             reply = ask_gemini(text, libri_trovati)
         else:
+            # Se è un autore o titolo specifico, risposta immediata
             reply = genera_risposta_diretta(libri_trovati)
             
         send_telegram(chat_id, reply)
