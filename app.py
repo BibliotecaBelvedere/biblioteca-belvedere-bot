@@ -16,6 +16,12 @@ DB_FILE = "catalogo.db"
 
 STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova', 'dai', 'libri', 'sul', 'sui', 'cerchi'}
 
+NOTABENE_INFO = (
+    "\n\n_Nota: La consultazione online offre una panoramica parziale. Ti invitiamo a recarti presso la "
+    "Biblioteca Belvedere di Siracusa in piazza Eurialo 18, aperta dal lunedì al venerdì dalle 8.30 alle 13.15 "
+    "e il martedì e giovedì anche nel pomeriggio dalle 15.00 alle 17.15, per consultare il bibliotecario e visionare le opere complete._"
+)
+
 def normalize(s):
     s = str(s).lower().strip()
     for c in ['?', '!', ',', '.', ';', ':', '-', '_', '*', '"', "'"]:
@@ -51,7 +57,9 @@ def inizializza_database():
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute('CREATE TABLE IF NOT EXISTS libri (id INTEGER PRIMARY KEY AUTOINCREMENT, testo_completo TEXT, testo_normalizzato TEXT)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS stati_utente (chat_id INTEGER PRIMARY KEY, ultima_query TEXT)')
         cursor.execute("DELETE FROM libri")
+        conn.commit()
         
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
@@ -75,58 +83,93 @@ def inizializza_database():
     except Exception as e:
         return f"ERRORE: {str(e)}"
 
-def analizza_e_cerca(query_utente):
+def imposta_stato(chat_id, query_testo):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO stati_utente (chat_id, ultima_query) VALUES (?, ?)", (chat_id, query_testo))
+    conn.commit()
+    conn.close()
+
+def leggi_e_cancella_stato(chat_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT ultima_query FROM stati_utente WHERE chat_id = ?", (chat_id,))
+    riga = cursor.fetchone()
+    if riga:
+        cursor.execute("DELETE FROM stati_utente WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+        conn.close()
+        return riga[0]
+    conn.close()
+    return None
+
+def cerca_diretta_catalogo(query_utente):
     q = normalize(query_utente)
     parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
     
-    # Rilevamento dei macro-generi (Fissiamo il binario Semantico/IA)
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
+    parametri = [f"%{p}%" for p in parole]
+    
+    if condizioni:
+        cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 15", parametri)
+    else:
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE ? LIMIT 15", (f"%{q}%",))
+        
+    righe = cursor.fetchall()
+    conn.close()
+    return [r[0] for r in righe]
+
+def cerca_espansa_per_gemini(query_utente):
+    q = normalize(query_utente)
+    
+    # Rilevamento dei macro-campi semantici per allargare le maglie del DB
     is_giallo = any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller", "assass"])
     is_rosa = any(g in q for g in ["rosa", "amor", "sentiment", "romant", "relazion"])
-    is_bullismo = any(g in q for g in ["bullis", "bullo", "prevarica", "violenza scuo"])
+    is_bullismo = any(g in q for g in ["bullis", "bullo", "prevarica", "violenz"])
     is_cucina = any(g in q for g in ["cucin", "ricett", "mangiar", "gastronom"])
     is_territorio = any(g in q for g in ["territorio", "sicilia", "siracusa", "locale", "tradizion"])
-    
-    is_tematica_generica = is_giallo or is_rosa or is_bullismo or is_cucina or is_territorio
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 30")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' OR testo_normalizzato LIKE '%thriller%' LIMIT 35")
     elif is_rosa:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%romanzo%' OR testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%modignani%' OR testo_normalizzato LIKE '%steel%' LIMIT 30")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%romanzo%' OR testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%modignani%' OR testo_normalizzato LIKE '%steel%' LIMIT 35")
     elif is_bullismo:
-        # PRIORITÀ ASSOLUTA a chi contiene "bullo" o "bullis" per non perderci libri fondamentali come "Io ero un bullo"
         cursor.execute("""
-            SELECT testo_completo FROM libri 
-            WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%'
+            SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%'
             UNION
-            SELECT testo_completo FROM libri 
-            WHERE testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' OR testo_normalizzato LIKE '%ragazzi%'
-            LIMIT 30
+            SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' OR testo_normalizzato LIKE '%ragazzi%'
+            LIMIT 35
         """)
     elif is_cucina:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 30")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 35")
     elif is_territorio:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 30")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 35")
     else:
-        # BINARIO DIRETTO (Ricerca per autore o titolo specifico, es: Vittorini, Sciascia, Dante)
+        # Se è un argomento generico non catalogato, prendiamo le parole chiave principali
+        parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 15", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 30", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE ? LIMIT 15", (f"%{q}%",))
+            cursor.execute("SELECT testo_completo FROM libri LIMIT 30")
             
     righe = cursor.fetchall()
     conn.close()
-    
-    testi_libri = [r[0] for r in righe]
-    return testi_libri, is_tematica_generica
+    return [r[0] for r in righe]
 
 def genera_risposta_diretta(elenco_libri):
     if not elenco_libri:
-        return "Gentile utente, non ho trovato volumi corrispondenti a questa specifica ricerca nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per verificare gli scaffali cartacei."
+        return (
+            "Gentile utente, non ho trovato volumi corrispondenti a questa specifica ricerca nel catalogo digitale."
+            + NOTABENE_INFO
+        )
         
     elenco_essenziale = []
     for blocco in elenco_libri:
@@ -137,13 +180,13 @@ def genera_risposta_diretta(elenco_libri):
     elenco_essenziale = list(set(elenco_essenziale))
     
     testo_risposta = (
-        "📚 **Biblioteca Belvedere (SBS0CB) - Risultato della Ricerca**:\n\n"
-        "Gentile utente, ecco i titoli specifici individuati direttamente nel nostro catalogo:\n\n"
+        "📚 **Biblioteca Belvedere (SBS0CB) - Risultato del Catalogo**:\n\n"
+        "Ecco i titoli specifici individuati direttamente nei nostri registri:\n\n"
     )
     for libro in elenco_essenziale[:10]:
         testo_risposta += f"• {libro}\n"
         
-    testo_risposta += "\n_Nota: Questa selezione è estratta direttamente dal database. Ti invitiamo in sede a Siracusa per consultare il bibliotecario e visionare le opere complete._"
+    testo_risposta += NOTABENE_INFO
     return testo_risposta
 
 def ask_gemini(user_message, testi_libri):
@@ -158,21 +201,21 @@ def ask_gemini(user_message, testi_libri):
     
     prompt_completo = (
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
-        "Il tuo scopo è formulare una breve, colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA basandoti sui libri forniti nell'elenco in basso.\n\n"
-        f"L'utente richiede informazioni su: '{user_message}'\n\n"
+        "Il tuo compito è formulare una colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA rispondendo alla richiesta tematica del lettore basandoti INTEGRAMENTE sulla lista di libri forniti in basso.\n\n"
+        f"L'utente richiede informazioni su questo argomento/genere: '{user_message}'\n\n"
         "REGOLE TASSATIVE DI SCRITTURA:\n"
-        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più strettamente attinenti estratti dalla lista (se ci sono libri chiaramente focalizzati sul tema, come saggi o romanzi specifici sul bullismo/adolescenza, dai loro massima priorità).\n"
+        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più strettamente attinenti estratti dalla lista. Se l'utente cerca il bullismo e nella lista c'è un libro focalizzato (es. 'Io ero un bullo'), mettilo in primissimo piano e valorizzalo.\n"
         "2. Per ogni libro consigliato specifica chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati forniti.\n"
-        "3. Formula la risposta con uno stile professionale ed editoriale. Se un libro dell'elenco ti sembra totalmente fuori tema rispetto alla richiesta del lettore, ignoralo.\n"
-        "4. Includi SEMPRE alla fine una nota discorsiva che indica che la risposta è parziale e invita a consultare il bibliotecario in sede a Siracusa per informazioni complete e approfondimenti."
+        "3. Formula la risposta con uno stile professionale ed editoriale da bibliotecario esperto. Se un libro dell'elenco ti sembra totalmente fuori tema, ignoralo senza menzionarlo.\n"
+        "4. Non aggiungere note standard alla fine perché l'orario e l'indirizzo della biblioteca vengono già accodati automaticamente dal sistema operativo del bot."
     )
 
     payload = {
         "contents": [{
             "role": "user",
-            "parts": [{"text": f"{prompt_completo}\n\nELENCO SCHEDE DISPONIBILI:\n{context}"}]
+            "parts": [{"text": f"{prompt_completo}\n\nELENCO SCHEDE DISPONIBILI NEL DATABASE:\n{context}"}]
         }],
-        "generationConfig": { "temperature": 0.3 },
+        "generationConfig": { "temperature": 0.2 },
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -189,42 +232,78 @@ def ask_gemini(user_message, testi_libri):
             if 'candidates' in res_json and len(res_json['candidates']) > 0:
                 testo_risposta = res_json['candidates'][0]['content']['parts'][0]['text']
                 if testo_risposta and len(testo_risposta.strip()) > 40:
-                    return testo_risposta
+                    return testo_risposta + NOTABENE_INFO
     except:
         pass
 
     return genera_risposta_diretta(testi_libri)
 
+def send_telegram_with_buttons(chat_id, text):
+    # Tastiera nativa di Telegram per costringere l'utente al bivio corretto
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "🔍 Cerca per Autore / Titolo", "callback_data": "MODE_DIRETTA"},
+                {"text": "📚 Ricerca per Argomento / Genere", "callback_data": "MODE_SEMANTICA"}
+            ]
+        ]
+    }
+    payload = {
+        "chat_id": chat_id,
+        "text": f"Ho ricevuto la tua richiesta per: *\"{text}\"*\n\nPer aiutarti al meglio, per favore specifica che tipo di ricerca desideri effettuare:",
+        "parse_mode": "Markdown",
+        "reply_markup": keyboard
+    }
+    try: requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+    except: pass
+
 def send_telegram(chat_id, text):
     try: requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
     except: pass
 
-def async_process_request(chat_id, text):
-    try:
-        libri_trovati, richiede_ai = analizza_e_cerca(text)
-        
-        # FORZATURA DOPPIO BINARIO: Se richiede_ai è True, andiamo SEMPRE da Gemini se ci sono libri
-        if richiede_ai and libri_trovati:
-            reply = ask_gemini(text, libri_trovati)
-        else:
-            reply = genera_risposta_diretta(libri_trovati)
-            
-        send_telegram(chat_id, reply)
-    except:
-        send_telegram(chat_id, "Servizio di consultazione online attivo. Il bibliotecario in sede a Siracusa rimane a disposizione.")
+def esegui_bivio_ricerca(chat_id, modalita, query_originale):
+    if modalita == "MODE_DIRETTA":
+        libri = cerca_diretta_catalogo(query_originale)
+        risposta = genera_risposta_diretta(libri)
+        send_telegram(chat_id, risposta)
+    elif modalita == "MODE_SEMANTICA":
+        send_telegram(chat_id, "🔄 Sto elaborando una bibliografia critica con l'ausilio dell'Intelligenza Artificiale...")
+        libri = cerca_espansa_per_gemini(query_originale)
+        risposta = ask_gemini(query_originale, libri)
+        send_telegram(chat_id, risposta)
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
     try:
         data = request.get_json()
-        if data and "message" in data:
+        if not data:
+            return "OK", 200
+            
+        # Gestione del pulsante cliccato (Callback Query)
+        if "callback_query" in data:
+            chat_id = data["callback_query"]["message"]["chat"]["id"]
+            modalita = data["callback_query"]["data"]
+            query_originale = leggi_e_cancella_stato(chat_id)
+            
+            if query_originale:
+                Thread(target=esegui_bivio_ricerca, args=(chat_id, modalita, query_originale)).start()
+            else:
+                send_telegram(chat_id, "Sessione scaduta. Effettua nuovamente la tua richiesta.")
+            return "OK", 200
+
+        # Gestione del messaggio testuale normale
+        if "message" in data:
             chat_id = data["message"]["chat"]["id"]
             text = data["message"].get("text", "").strip()
+            
             if text == "/start":
-                send_telegram(chat_id, "Benvenuto alla Biblioteca Belvedere! Chiedimi pure consigli di lettura o percorsi tematici sul nostro catalogo.")
+                send_telegram(chat_id, "Benvenuto alla Biblioteca Belvedere! Inviami il testo o l'argomento che desideri cercare.")
             elif chat_id and text:
-                Thread(target=async_process_request, args=(chat_id, text)).start()
-    except: pass
+                # Salviamo la richiesta nello stato e proponiamo il bivio esplicito all'utente
+                imposta_stato(chat_id, text)
+                send_telegram_with_buttons(chat_id, text)
+    except: 
+        pass
     return "OK", 200
 
 @app.route("/setup", methods=["GET"])
