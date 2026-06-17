@@ -137,38 +137,38 @@ def cerca_espansa_per_gemini(query_utente):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
+    # Pulizia mirata delle query: prendiamo solo record altamente coerenti per non intasare l'AI
     if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' OR testo_normalizzato LIKE '%thriller%' LIMIT 30")
+        cursor.execute("""
+            SELECT testo_completo FROM libri WHERE 
+            (testo_normalizzato LIKE '%adler olsen%' OR testo_normalizzato LIKE '%gialloparma%' OR testo_normalizzato LIKE '%signora in giallo%')
+            OR (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%delitto%' OR testo_normalizzato LIKE '%thriller%'))
+            LIMIT 20
+        """)
     elif is_rosa:
-        # Pulizia totale delle autrici fuori target (rimossa Allende, reinseriti solo i pilastri del rosa/romance)
         cursor.execute("""
             SELECT testo_completo FROM libri WHERE 
             testo_normalizzato LIKE '%modignani%' OR 
             testo_normalizzato LIKE '%steel%' OR 
             testo_normalizzato LIKE '%adrian%' OR 
             testo_normalizzato LIKE '%sparks%' OR 
-            (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%lettere d%'))
-            LIMIT 30
+            (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%lettrice di romanzi%'))
+            LIMIT 20
         """)
     elif is_bullismo:
-        cursor.execute("""
-            SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%'
-            UNION
-            SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' OR testo_normalizzato LIKE '%ragazzi%'
-            LIMIT 25
-        """)
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' LIMIT 20")
     elif is_cucina:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 25")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 20")
     elif is_territorio:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 25")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' LIMIT 20")
     else:
         parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
         if parole:
             condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
             parametri = [f"%{p}%" for p in parole]
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 20", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri LIMIT 25")
+            cursor.execute("SELECT testo_completo FROM libri LIMIT 20")
             
     righe = cursor.fetchall()
     conn.close()
@@ -213,37 +213,30 @@ def ask_gemini(user_message, testi_libri):
     context = "\n".join([f"- {item}" for item in elenco_essenziale])
     
     prompt_completo = (
-        "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
-        "Il tuo compito è formulare una colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA rispondendo alla richiesta tematica del lettore basandoti INTEGRAMENTE sulla lista di libri forniti in basso.\n\n"
-        f"L'utente richiede informazioni su questo argomento/genere: '{user_message}'\n\n"
-        "REGOLE TASSATIVE DI SCRITTURA E STRUTTURA:\n"
-        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento con grazia.\n"
-        "2. Organizza i libri in modo intelligente DIVIDENDOLI IN CATEGORIE STRUTTURATE (es. per ambientazione storica, per sottogenere, o per dinamica relazionale, es. Classici dell'amore, Romance Contemporaneo, Amori storici).\n"
-        "3. Per ogni libro consigliato specifica chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati forniti.\n"
-        "4. Includi assolutamente i romanzi di grandi autrici come Sveva Casati Modignani o Danielle Steel se presenti nell'elenco fornito, mettendoli in evidenza.\n"
-        "5. Formula la risposta con uno stile professionale ed editoriale da bibliotecario esperto. Se un libro dell'elenco ti sembra totalmente fuori tema, ignoralo senza menzionarlo.\n"
-        "6. Non aggiungere note standard alla fine perché l'orario e l'indirizzo della biblioteca vengono già accodati automaticamente dal sistema."
+        "Sei il Consulente Bibliografico della Biblioteca Belvedere di Siracusa.\n"
+        "Genera una BIBLIOGRAFIA RAGIONATA accogliente e colta basandoti SOLO sulla lista di libri fornita sotto.\n\n"
+        f"Richiesta del lettore: '{user_message}'\n\n"
+        "REGOLE DI SCRITTURA:\n"
+        "1. Organizza i libri dividendoli chiaramente per aree tematiche coerenti (es. Ambientazione Storica, Suspense e Sentiment, Grandi Autrici Contemporanee, ecc.).\n"
+        "2. Per ogni libro indica: Titolo, Autore, Collocazione ed un commento critico ed editoriale raffinato.\n"
+        "3. Includi rigorosamente le autrici di punta del genere richiesto presenti nell'elenco (come Sveva Casati Modignani, Lara Adrian o Danielle Steel).\n"
+        "4. Non inserire l'indirizzo della biblioteca o saluti finali standard alla fine della risposta."
     )
 
-    # Payload corretto e standardizzato (rimosso il tag 'role' che generava il Bad Request)
+    # Nuovo schema di payload iper-veloce e leggero per azzerare i tempi di attesa ed evitare i timeout
     payload = {
         "contents": [{
-            "parts": [{"text": f"{prompt_completo}\n\nELENCO SCHEDE DISPONIBILI NEL DATABASE:\n{context}"}]
+            "parts": [{"text": f"{prompt_completo}\n\nLIBRI DISPONIBILI:\n{context}"}]
         }],
         "generationConfig": {
-            "temperature": 0.2
-        },
-        "safetySettings": [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-        ]
+            "temperature": 0.3,
+            "maxOutputTokens": 1000
+        }
     }
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=22)
+        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         if response.status_code == 200:
             res_json = response.json()
             if 'candidates' in res_json and len(res_json['candidates']) > 0:
@@ -253,6 +246,7 @@ def ask_gemini(user_message, testi_libri):
     except:
         pass
 
+    # Se fallisce per qualsiasi motivo (compreso timeout), restituisce la lista ordinata pulita
     return genera_risposta_diretta(testi_libri)
 
 def send_telegram_with_buttons(chat_id, text):
@@ -287,7 +281,7 @@ def esegui_bivio_ricerca(chat_id, modalita, query_originale):
             risposta = ask_gemini(query_originale, libri)
             send_telegram(chat_id, risposta)
     except Exception as e:
-        send_telegram(chat_id, "Errore durante l'elaborazione. Il bibliotecario in sede rimane a disposizione.")
+        send_telegram(chat_id, "Errore temporaneo di comunicazione. Il bibliotecario in sede rimane a disposizione.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
