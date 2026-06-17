@@ -57,14 +57,14 @@ def inizializza_database():
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute('CREATE TABLE IF NOT EXISTS libri (id INTEGER PRIMARY KEY AUTOINCREMENT, testo_completo TEXT, testo_normalizzato TEXT)')
-        cursor.execute('CREATE TABLE IF NOT EXISTS stati_utente (chat_id INTEGER PRIMARY KEY, ultima_query TEXT)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS stati_utente (chat_id TEXT PRIMARY KEY, ultima_query TEXT)')
         cursor.execute("DELETE FROM libri")
         conn.commit()
         
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenuto.split("[nd]")
+        pezzi_raw = contenido.split("[nd]") if 'contenido' in locals() else contenuto.split("[nd]")
         if len(pezzi_raw) <= 1:
             pezzi_raw = contenuto.split("\n\n")
             
@@ -86,17 +86,17 @@ def inizializza_database():
 def imposta_stato(chat_id, query_testo):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO stati_utente (chat_id, ultima_query) VALUES (?, ?)", (chat_id, query_testo))
+    cursor.execute("INSERT OR REPLACE INTO stati_utente (chat_id, ultima_query) VALUES (?, ?)", (str(chat_id), query_testo))
     conn.commit()
     conn.close()
 
 def leggi_e_cancella_stato(chat_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT ultima_query FROM stati_utente WHERE chat_id = ?", (chat_id,))
+    cursor.execute("SELECT ultima_query FROM stati_utente WHERE chat_id = ?", (str(chat_id),))
     riga = cursor.fetchone()
     if riga:
-        cursor.execute("DELETE FROM stati_utente WHERE chat_id = ?", (chat_id,))
+        cursor.execute("DELETE FROM stati_utente WHERE chat_id = ?", (str(chat_id),))
         conn.commit()
         conn.close()
         return riga[0]
@@ -125,7 +125,6 @@ def cerca_diretta_catalogo(query_utente):
 def cerca_espansa_per_gemini(query_utente):
     q = normalize(query_utente)
     
-    # Rilevamento dei macro-campi semantici per allargare le maglie del DB
     is_giallo = any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller", "assass"])
     is_rosa = any(g in q for g in ["rosa", "amor", "sentiment", "romant", "relazion"])
     is_bullismo = any(g in q for g in ["bullis", "bullo", "prevarica", "violenz"])
@@ -136,29 +135,28 @@ def cerca_espansa_per_gemini(query_utente):
     cursor = conn.cursor()
     
     if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' OR testo_normalizzato LIKE '%thriller%' LIMIT 35")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' OR testo_normalizzato LIKE '%thriller%' LIMIT 25")
     elif is_rosa:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%romanzo%' OR testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%modignani%' OR testo_normalizzato LIKE '%steel%' LIMIT 35")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%romanzo%' OR testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%modignani%' OR testo_normalizzato LIKE '%steel%' LIMIT 25")
     elif is_bullismo:
         cursor.execute("""
             SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%'
             UNION
             SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' OR testo_normalizzato LIKE '%ragazzi%'
-            LIMIT 35
+            LIMIT 25
         """)
     elif is_cucina:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 35")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 25")
     elif is_territorio:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 35")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 25")
     else:
-        # Se è un argomento generico non catalogato, prendiamo le parole chiave principali
         parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 30", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri LIMIT 30")
+            cursor.execute("SELECT testo_completo FROM libri LIMIT 25")
             
     righe = cursor.fetchall()
     conn.close()
@@ -206,7 +204,7 @@ def ask_gemini(user_message, testi_libri):
         "REGOLE TASSATIVE DI SCRITTURA:\n"
         "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più strettamente attinenti estratti dalla lista. Se l'utente cerca il bullismo e nella lista c'è un libro focalizzato (es. 'Io ero un bullo'), mettilo in primissimo piano e valorizzalo.\n"
         "2. Per ogni libro consigliato specifica chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati forniti.\n"
-        "3. Formula la risposta con uno stile professionale ed editoriale da bibliotecario esperto. Se un libro dell'elenco ti sembra totalmente fuori tema, ignoralo senza menzionarlo.\n"
+        "3. Formula la risposta con uno stile professionale ed editoriale da bibliotecario espresso. Se un libro dell'elenco ti sembra totalmente fuori tema, ignoralo senza menzionarlo.\n"
         "4. Non aggiungere note standard alla fine perché l'orario e l'indirizzo della biblioteca vengono già accodati automaticamente dal sistema operativo del bot."
     )
 
@@ -226,7 +224,7 @@ def ask_gemini(user_message, testi_libri):
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=25)
+        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=22)
         if response.status_code == 200:
             res_json = response.json()
             if 'candidates' in res_json and len(res_json['candidates']) > 0:
@@ -239,18 +237,17 @@ def ask_gemini(user_message, testi_libri):
     return genera_risposta_diretta(testi_libri)
 
 def send_telegram_with_buttons(chat_id, text):
-    # Tastiera nativa di Telegram per costringere l'utente al bivio corretto
+    # MIGLIORAMENTO: Pulsanti disposti in VERTICALE (uno sotto l'altro) e testi più snelli. 
+    # In questo modo sullo schermo dello smartphone la lettura sarà totale e pulita.
     keyboard = {
         "inline_keyboard": [
-            [
-                {"text": "🔍 Cerca per Autore / Titolo", "callback_data": "MODE_DIRETTA"},
-                {"text": "📚 Ricerca per Argomento / Genere", "callback_data": "MODE_SEMANTICA"}
-            ]
+            [{"text": "🔍 Cerca Autore o Titolo specifico", "callback_data": "MODE_DIRETTA"}],
+            [{"text": "📚 Cerca per Argomento o Genere", "callback_data": "MODE_SEMANTICA"}]
         ]
     }
     payload = {
         "chat_id": chat_id,
-        "text": f"Ho ricevuto la tua richiesta per: *\"{text}\"*\n\nPer aiutarti al meglio, per favore specifica che tipo di ricerca desideri effettuare:",
+        "text": f"Ho ricevuto la tua richiesta per: *\"{text}\"*\n\nPer favore, specifica che tipo di ricerca desideri effettuare per ottimizzare i risultati:",
         "parse_mode": "Markdown",
         "reply_markup": keyboard
     }
@@ -262,15 +259,18 @@ def send_telegram(chat_id, text):
     except: pass
 
 def esegui_bivio_ricerca(chat_id, modalita, query_originale):
-    if modalita == "MODE_DIRETTA":
-        libri = cerca_diretta_catalogo(query_originale)
-        risposta = genera_risposta_diretta(libri)
-        send_telegram(chat_id, risposta)
-    elif modalita == "MODE_SEMANTICA":
-        send_telegram(chat_id, "🔄 Sto elaborando una bibliografia critica con l'ausilio dell'Intelligenza Artificiale...")
-        libri = cerca_espansa_per_gemini(query_originale)
-        risposta = ask_gemini(query_originale, libri)
-        send_telegram(chat_id, risposta)
+    try:
+        if modalita == "MODE_DIRETTA":
+            libri = cerca_diretta_catalogo(query_originale)
+            risposta = genera_risposta_diretta(libri)
+            send_telegram(chat_id, risposta)
+        elif modalita == "MODE_SEMANTICA":
+            send_telegram(chat_id, "🔄 Sto elaborando una bibliografia tematica con l'ausilio dell'Intelligenza Artificiale...")
+            libri = cerca_espansa_per_gemini(query_originale)
+            risposta = ask_gemini(query_originale, libri)
+            send_telegram(chat_id, risposta)
+    except Exception as e:
+        send_telegram(chat_id, f"Errore durante l'elaborazione. Il bibliotecario in sede rimane a disposizione.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
@@ -285,10 +285,15 @@ def telegram_webhook():
             modalita = data["callback_query"]["data"]
             query_originale = leggi_e_cancella_stato(chat_id)
             
+            # Inviamo subito una conferma di ricezione click a Telegram per non far bloccare l'interfaccia
+            try:
+                requests.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": data["callback_query"]["id"]}, timeout=5)
+            except: pass
+            
             if query_originale:
                 Thread(target=esegui_bivio_ricerca, args=(chat_id, modalita, query_originale)).start()
             else:
-                send_telegram(chat_id, "Sessione scaduta. Effettua nuovamente la tua richiesta.")
+                send_telegram(chat_id, "Sessione scaduta o ricerca già effettuata. Digita una nuova richiesta.")
             return "OK", 200
 
         # Gestione del messaggio testuale normale
@@ -299,7 +304,6 @@ def telegram_webhook():
             if text == "/start":
                 send_telegram(chat_id, "Benvenuto alla Biblioteca Belvedere! Inviami il testo o l'argomento che desideri cercare.")
             elif chat_id and text:
-                # Salviamo la richiesta nello stato e proponiamo il bivio esplicito all'utente
                 imposta_stato(chat_id, text)
                 send_telegram_with_buttons(chat_id, text)
     except: 
