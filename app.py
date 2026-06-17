@@ -117,7 +117,7 @@ def cerca_diretta_catalogo(query_utente):
         ordinamento = " + ".join([f"(CASE WHEN testo_normalizzato LIKE ? THEN 0 ELSE 1 END)" for _ in parole])
         
         query_sql = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} ORDER BY {ordinamento}, id ASC LIMIT 15"
-        cursor.execute(query_sql, Balls = parametri_completi)
+        cursor.execute(query_sql, parametri_completi)
     else:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE ? ORDER BY (CASE WHEN testo_normalizzato LIKE ? THEN 0 ELSE 1 END), id ASC LIMIT 15", (f"%{q}%", f"{q}%"))
         
@@ -138,9 +138,19 @@ def cerca_espansa_per_gemini(query_utente):
     cursor = conn.cursor()
     
     if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' OR testo_normalizzato LIKE '%thriller%' LIMIT 25")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' OR testo_normalizzato LIKE '%thriller%' LIMIT 30")
     elif is_rosa:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%romanzo%' OR testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%modignani%' OR testo_normalizzato LIKE '%steel%' LIMIT 25")
+        # Ampliamo la ricerca inserendo esplicitamente le regine del romance per catturare tutto il sottoinsieme corretto
+        cursor.execute("""
+            SELECT testo_completo FROM libri WHERE 
+            testo_normalizzato LIKE '%modignani%' OR 
+            testo_normalizzato LIKE '%steel%' OR 
+            testo_normalizzato LIKE '%adrian%' OR 
+            testo_normalizzato LIKE '%sparks%' OR 
+            testo_normalizzato LIKE '%allende%' OR
+            (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%'))
+            LIMIT 35
+        """)
     elif is_bullismo:
         cursor.execute("""
             SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%'
@@ -207,14 +217,15 @@ def ask_gemini(user_message, testi_libri):
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
         "Il tuo compito è formulare una colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA rispondendo alla richiesta tematica del lettore basandoti INTEGRAMENTE sulla lista di libri forniti in basso.\n\n"
         f"L'utente richiede informazioni su questo argomento/genere: '{user_message}'\n\n"
-        "REGOLE TASSATIVE DI SCRITTURA:\n"
-        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più strettamente attinenti estratti dalla lista.\n"
-        "2. Per ogni libro consigliato specifica chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati forniti.\n"
-        "3. Formula la risposta con uno stile professionale ed editoriale da bibliotecario esperto. Se un libro dell'elenco ti sembra totalmente fuori tema, ignoralo senza menzionarlo.\n"
-        "4. Non aggiungere note standard alla fine perché l'orario e l'indirizzo della biblioteca vengono già accodati automaticamente dal sistema operativo del bot."
+        "REGOLE TASSATIVE DI SCRITTURA E STRUTTURA:\n"
+        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento con grazia.\n"
+        "2. Organizza i libri in modo intelligente DIVIDENDOLI IN CATEGORIE STRUTTURATE (es. per ambientazione storica, per sottogenere, o per dinamica relazionale, es. Classici dell'amore, Romance Contemporaneo, Amori storici).\n"
+        "3. Per ogni libro consigliato specifica chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati forniti.\n"
+        "4. Includi assolutamente i romanzi di grandi autrici come Sveva Casati Modignani o Danielle Steel se presenti nell'elenco fornito, mettendoli in evidenza.\n"
+        "5. Formula la risposta con uno stile professionale ed editoriale da bibliotecario esperto. Se un libro dell'elenco ti sembra totalmente fuori tema, ignoralo senza menzionarlo.\n"
+        "6. Non aggiungere note standard alla fine perché l'orario e l'indirizzo della biblioteca vengono già accodati automaticamente dal sistema."
     )
 
-    # Payload originario e validato per la chiamata HTTP diretta (v1beta delle API Gemini)
     payload = {
         "contents": [{
             "role": "user",
@@ -232,7 +243,6 @@ def ask_gemini(user_message, testi_libri):
     }
 
     try:
-        # Endpoint nativo e validato del modello funzionante
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=22)
         if response.status_code == 200:
@@ -247,7 +257,6 @@ def ask_gemini(user_message, testi_libri):
     return genera_risposta_diretta(testi_libri)
 
 def send_telegram_with_buttons(chat_id, text):
-    # Ripristino esatto della tastiera con i due tasti completi e incolonnati in verticale
     keyboard = {
         "inline_keyboard": [
             [{"text": "🔍 Ricerca per Autore o Titolo", "callback_data": "MODE_DIRETTA"}],
@@ -279,7 +288,7 @@ def esegui_bivio_ricerca(chat_id, modalita, query_originale):
             risposta = ask_gemini(query_originale, libri)
             send_telegram(chat_id, risposta)
     except Exception as e:
-        send_telegram(chat_id, f"Errore durante l'elaborazione. Il bibliotecario in sede rimane a disposizione.")
+        send_telegram(chat_id, "Errore durante l'elaborazione. Il bibliotecario in sede rimane a disposizione.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
