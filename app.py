@@ -140,16 +140,15 @@ def cerca_espansa_per_gemini(query_utente):
     if is_giallo:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' OR testo_normalizzato LIKE '%thriller%' LIMIT 30")
     elif is_rosa:
-        # Ampliamo la ricerca inserendo esplicitamente le regine del romance per catturare tutto il sottoinsieme corretto
+        # Pulizia totale delle autrici fuori target (rimossa Allende, reinseriti solo i pilastri del rosa/romance)
         cursor.execute("""
             SELECT testo_completo FROM libri WHERE 
             testo_normalizzato LIKE '%modignani%' OR 
             testo_normalizzato LIKE '%steel%' OR 
             testo_normalizzato LIKE '%adrian%' OR 
             testo_normalizzato LIKE '%sparks%' OR 
-            testo_normalizzato LIKE '%allende%' OR
-            (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%'))
-            LIMIT 35
+            (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%lettere d%'))
+            LIMIT 30
         """)
     elif is_bullismo:
         cursor.execute("""
@@ -226,9 +225,9 @@ def ask_gemini(user_message, testi_libri):
         "6. Non aggiungere note standard alla fine perché l'orario e l'indirizzo della biblioteca vengono già accodati automaticamente dal sistema."
     )
 
+    # Payload corretto e standardizzato (rimosso il tag 'role' che generava il Bad Request)
     payload = {
         "contents": [{
-            "role": "user",
             "parts": [{"text": f"{prompt_completo}\n\nELENCO SCHEDE DISPONIBILI NEL DATABASE:\n{context}"}]
         }],
         "generationConfig": {
