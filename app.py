@@ -140,7 +140,6 @@ def cerca_espansa_per_gemini(query_utente):
     if is_giallo:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%thriller%' OR testo_normalizzato LIKE '%adler olsen%' LIMIT 25")
     elif is_rosa:
-        # Recupero mirato basato sul testo: prendiamo direttamente le autrici chiave e i romanzi d'amore per evitare Barbero o Baricco
         cursor.execute("""
             SELECT testo_completo FROM libri WHERE 
             testo_normalizzato LIKE '%modignani%' OR 
@@ -207,13 +206,12 @@ def ask_gemini(user_message, testi_libri):
     elenco_essenziale = list(set(elenco_essenziale))
     context = "\n".join([f"- {item}" for item in elenco_essenziale])
     
-    # Il prompt originale e strutturato che ha generato la risposta "intelligente"
     prompt_completo = (
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
         "Accogli il lettore con grazia e formula una splendida BIBLIOGRAFIA TEMATICA RAGIONATA basandoti ESCLUSIVAMENTE sui libri forniti nell'elenco in basso.\n\n"
         f"Richiesta dell'utente: '{user_message}'\n\n"
         "REGOLE DI STRUTTURA:\n"
-        "1. Inizia con un'introduzione calorosa ed elegante rivolta al lettore della biblioteca.\n"
+        "1. Inicia con un'introduzione calorosa ed elegante rivolta al lettore della biblioteca.\n"
         "2. RAGGRUPPA I ROMANZI IN CATEGORIE TEMATICHE O AMBIENTAZIONI STORICHE (es. Romance Contemporaneo, Grandi Autrici, Romanzi Storici d'Amore, ecc.).\n"
         "3. Per ogni libro inserisci un punto elenco con Titolo, Autore, Collocazione e una breve descrizione affascinante dedotta dai dati.\n"
         "4. Metti in forte evidenza le opere di Sveva Casati Modignani o Danielle Steel se appaiono nell'elenco.\n"
@@ -221,7 +219,6 @@ def ask_gemini(user_message, testi_libri):
         "6. Non inserire orari o firme standard alla fine."
     )
 
-    # Payload pulito e privo di tag superflui (evita i blocchi di errore di Google)
     payload = {
         "contents": [{
             "parts": [{"text": f"{prompt_completo}\n\nELENCO LIBRI DISPONIBILI:\n{context}"}]
@@ -241,7 +238,7 @@ def ask_gemini(user_message, testi_libri):
                 if testo_risposta and len(testo_risposta.strip()) > 50:
                     return testo_risposta + NOTABENE_INFO
     except Exception as e:
-        pass
+        print(f"Errore chiamata Gemini: {str(e)}")
 
     return genera_risposta_diretta(testi_libri)
 
@@ -266,18 +263,16 @@ def send_telegram(chat_id, text):
     except: pass
 
 def esegui_bivio_ricerca(chat_id, modalita, query_originale):
-    try:
-        if modalita == "MODE_DIRETTA":
-            libri = cerca_diretta_catalogo(query_originale)
-            risposta = genera_risposta_diretta(libri)
-            send_telegram(chat_id, respuesta)
-        elif modalita == "MODE_SEMANTICA":
-            send_telegram(chat_id, "🔄 Sto elaborando una bibliografia tematica con l'ausilio dell'Intelligenza Artificiale...")
-            libri = cerca_espansa_per_gemini(query_originale)
-            risposta = ask_gemini(query_originale, libri)
-            send_telegram(chat_id, risposta)
-    except Exception as e:
-        send_telegram(chat_id, "Errore di elaborazione. Il catalogo rimane a disposizione.")
+    # Raddrizzato l'ingranaggio: tolto il finto blocco di catch che faceva fare i passi indietro
+    if modalita == "MODE_DIRETTA":
+        libri = cerca_diretta_catalogo(query_originale)
+        risposta = genera_risposta_diretta(libri)
+        send_telegram(chat_id, risposta)
+    elif modalita == "MODE_SEMANTICA":
+        send_telegram(chat_id, "🔄 Sto elaborando una bibliografia tematica con l'ausilio dell'Intelligenza Artificiale...")
+        libri = cerca_espansa_per_gemini(query_originale)
+        risposta = ask_gemini(query_originale, libri)
+        send_telegram(chat_id, risposta)
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
