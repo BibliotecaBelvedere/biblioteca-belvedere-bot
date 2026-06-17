@@ -32,8 +32,7 @@ def estrai_essenziale_libro(testo_blocco):
     testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
     
-    # Tagliamo via le informazioni tipografiche e burocratiche (p., cm, ISBN, collane) che appesantiscono i token
-    # Cerchiamo il pattern delle pagine (es. 234 p. o 123 p. : ill.) o delle dimensioni per troncare la spazzatura
+    # Tagliamo via le informazioni tipografiche e burocratiche (p., cm, ISBN, collane)
     testo_pulito = re.split(r'\d+\s+p\b', testo_pulito)[0]
     testo_pulito = re.split(r'-\s+ISBN\b', testo_pulito)[0]
     testo_pulito = re.split(r';\s+\d+\s+cm', testo_pulito)[0]
@@ -59,9 +58,10 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenido.split("[nd]")
+        # CORRETTO: Adesso usiamo la variabile giusta 'contenuto'
+        pezzi_raw = contenuto.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenido.split("\n\n")
+            pezzi_raw = contenuto.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -90,11 +90,9 @@ def cerca_nel_db(query):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Estraiamo un numero mirato di record (max 25) per garantire risposte istantanee da parte di Gemini
     if is_giallo:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 25")
     elif is_rosa:
-        # Forziamo la query a cercare i veri romanzi d'amore/rosa evitando falsi positivi come cognomi o parole troncate
         cursor.execute("SELECT testo_completo FROM libri WHERE (testo_normalizzato LIKE '% romanzo %' AND testo_normalizzato LIKE '% amor %') OR testo_normalizzato LIKE '% modignani %' OR testo_normalizzato LIKE '% steel %' OR testo_normalizzato LIKE '% sparks %' OR testo_normalizzato LIKE '% romanzo rosa %' OR testo_normalizzato LIKE '% storia d amore %' LIMIT 25")
     elif is_bullismo:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 25")
@@ -102,7 +100,6 @@ def cerca_nel_db(query):
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 25")
     else:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
-        # Aggiungiamo spazi per cercare parole esatte ove possibile ed evitare falsi positivi sui frammenti di cognome
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
             cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 25", parametri)
@@ -123,7 +120,6 @@ def ask_gemini(user_message, testi_libri):
         if len(riga_snella) > 10:
             elenco_essenziale.append(riga_snella)
             
-    # Rimuoviamo i duplicati puliti
     elenco_essenziale = list(set(elenco_essenziale))
     context = "\n".join([f"- {item}" for item in elenco_essenziale])
     
@@ -159,7 +155,6 @@ def ask_gemini(user_message, testi_libri):
     except:
         pass
 
-    # EMERGENZA TRASPARENTE SUPER PULITA
     linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Selezione Bibliografica**:\n", "Gentile utente, ecco i principali titoli attinenti individuati nel catalogo:\n"]
     for item in elenco_essenziale[:6]:
         linee_emergenza.append(f"• {item}")
