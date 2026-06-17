@@ -23,17 +23,23 @@ def normalize(s):
     s = unicodedata.normalize("NFD", s)
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
-def pulisci_blocco_completo(testo):
-    """Scompatta il blocco eliminando ritorni a capo continui e spazzatura strutturale"""
-    if not testo:
+def estrai_essenziale_libro(testo_blocco):
+    """Prende un intero blocco di catalogo e ne estrae SOLO Collocazione, Autore e Titolo, buttando via il resto per alleggerire l'IA"""
+    if not testo_blocco:
         return ""
-    # Sostituisce i ritorni a capo con uno spazio per unire le righe spezzate
-    testo_unito = testo.replace("\n", " ").replace("\r", " ")
-    # Rimuove spazi multipli
+    
+    # Uniamo le righe e puliamo gli spazi
+    testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
-    # Sanificazione caratteri molesti per il JSON
+    
+    # Tagliamo via le informazioni tipografiche e burocratiche (p., cm, ISBN, collane) che appesantiscono i token
+    # Cerchiamo il pattern delle pagine (es. 234 p. o 123 p. : ill.) o delle dimensioni per troncare la spazzatura
+    testo_pulito = re.split(r'\d+\s+p\b', testo_pulito)[0]
+    testo_pulito = re.split(r'-\s+ISBN\b', testo_pulito)[0]
+    testo_pulito = re.split(r';\s+\d+\s+cm', testo_pulito)[0]
+    
     testo_pulito = testo_pulito.replace('\\', '/').replace('"', "'")
-    return testo_pulito
+    return testo_pulito.strip()
 
 def inizializza_database():
     file_presenti = os.listdir(".")
@@ -53,10 +59,9 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        # Proviamo a dividere sia per [nd] sia per righe vuote doppie se [nd] fallisce
-        pezzi_raw = contenuto.split("[nd]")
+        pezzi_raw = contenido.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenuto.split("\n\n")
+            pezzi_raw = contenido.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -78,29 +83,31 @@ def cerca_nel_db(query):
     parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
     
     is_giallo = any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller"])
-    is_rosa = any(g in q for g in ["rosa", "amor", "sentiment"])
+    is_rosa = any(g in q for g in ["rosa", "amor", "sentiment", "romant"])
     is_bullismo = any(g in q for g in ["bullis", "bullo", "violenz"])
     is_cucina = "cucin" in q or "ricett" in q
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Riduciamo il LIMIT a 30 ma prendiamo blocchi più ricchi di informazioni
+    # Estraiamo un numero mirato di record (max 25) per garantire risposte istantanee da parte di Gemini
     if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 30")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 25")
     elif is_rosa:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%modignani%' OR testo_normalizzato LIKE '%steel%' LIMIT 30")
+        # Forziamo la query a cercare i veri romanzi d'amore/rosa evitando falsi positivi come cognomi o parole troncate
+        cursor.execute("SELECT testo_completo FROM libri WHERE (testo_normalizzato LIKE '% romanzo %' AND testo_normalizzato LIKE '% amor %') OR testo_normalizzato LIKE '% modignani %' OR testo_normalizzato LIKE '% steel %' OR testo_normalizzato LIKE '% sparks %' OR testo_normalizzato LIKE '% romanzo rosa %' OR testo_normalizzato LIKE '% storia d amore %' LIMIT 25")
     elif is_bullismo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 30")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 25")
     elif is_cucina:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 30")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 25")
     else:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
+        # Aggiungiamo spazi per cercare parole esatte ove possibile ed evitare falsi positivi sui frammenti di cognome
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 30", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 25", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri LIMIT 20")
+            cursor.execute("SELECT testo_completo FROM libri LIMIT 15")
             
     righe = cursor.fetchall()
     conn.close()
@@ -108,26 +115,26 @@ def cerca_nel_db(query):
 
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
-        return "Gentile utente, non ho trovato volumi corrispondenti nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per verificare gli scaffali fisici."
+        return "Gentile utente, non ho trovato volumi corrispondenti a questa tematica nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per verificare gli scaffali fisici."
 
-    elenco_pulito = []
+    elenco_essenziale = []
     for blocco in testi_libri:
-        blocco_sano = pulisci_blocco_completo(blocco)
-        if len(blocco_sano) > 10:
-            elenco_pulito.append(blocco_sano)
+        riga_snella = estrai_essenziale_libro(blocco)
+        if len(riga_snella) > 10:
+            elenco_essenziale.append(riga_snella)
             
-    # Rimuoviamo i duplicati identici estratti dal DB per non confondere l'IA
-    elenco_pulito = list(set(elenco_pulito))
-    context = "\n".join([f"- {item}" for item in elenco_pulito])
+    # Rimuoviamo i duplicati puliti
+    elenco_essenziale = list(set(elenco_essenziale))
+    context = "\n".join([f"- {item}" for item in elenco_essenziale])
     
     prompt_completo = (
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
-        "Il tuo scopo è formulare una breve ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA basandoti esclusivamente sui libri forniti nell'elenco in basso.\n\n"
+        "Il tuo scopo è formulare una breve, colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA basandoti sui libri forniti nell'elenco in basso.\n\n"
         f"L'utente richiede: '{user_message}'\n\n"
         "REGOLE TASSATIVE DI SCRITTURA:\n"
-        "1. Offri un testo fluido, accogliente e discorsivo. Introduci l'argomento ed elenca i libri più rilevanti estratti dalla lista.\n"
-        "2. IMPORTANTE: Leggi attentamente ogni riga fornita per trovare il Titolo del libro, l'Autore e la Collocazione (es. 21a-1 o I 5-1). Non inventare titoli.\n"
-        "3. Se nella riga vedi solo l'autore e manca il titolo, usa la tua conoscenza enciclopedica per dedurre quale possa essere il titolo del libro partendo dalla collocazione o dalle info presenti, oppure ometti quel record se è totalmente illeggibile.\n"
+        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più rilevanti estratti dalla lista.\n"
+        "2. Per ogni libro consigliato estrai chiaramente Titolo, Autore e Collocazione leggendoli dai dati forniti.\n"
+        "3. Formula la risposta con uno stile professionale ed editoriale.\n"
         "4. Includi SEMPRE alla fine una nota che indica che la risposta è parziale e invita a consultare il bibliotecario in sede a Siracusa per informazioni complete e approfondimenti."
     )
 
@@ -143,8 +150,7 @@ def ask_gemini(user_message, testi_libri):
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        # Portiamo il timeout a 25 secondi per evitare qualsiasi interruzione
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=25)
+        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
         
         if response.status_code == 200:
             res_json = response.json()
@@ -153,11 +159,10 @@ def ask_gemini(user_message, testi_libri):
     except:
         pass
 
-    # EMERGENZA TRASPARENTE (Se fallisce, mostra l'intera riga pulita del catalogo, così vedrai comunque l'intero testo)
-    linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Risultati della ricerca**:\n", "Gentile utente, ecco i principali dati attinenti individuati nel catalogo:\n"]
-    for item in elenco_pulito[:6]:
-        # Taglia la stringa se è troppo lunga per Telegram, ma mostra abbastanza testo per vedere il titolo
-        linee_emergenza.append(f"• {item[:140]}...")
+    # EMERGENZA TRASPARENTE SUPER PULITA
+    linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Selezione Bibliografica**:\n", "Gentile utente, ecco i principali titoli attinenti individuati nel catalogo:\n"]
+    for item in elenco_essenziale[:6]:
+        linee_emergenza.append(f"• {item}")
     linee_emergenza.append("\n_Nota: Questa selezione è parziale. Ti invitiamo in sede a Siracusa per consultare il bibliotecario e visionare il catalogo completo._")
     return "\n".join(linee_emergenza)
 
