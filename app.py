@@ -113,7 +113,7 @@ def cerca_diretta_catalogo(query_utente):
     if parole:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
-        parametri_completi = parametri + [f"{p}%" for p in parole]
+        parametri_completi = list(parametri) + list(parametri)
         ordinamento = " + ".join([f"(CASE WHEN testo_normalizzato LIKE ? THEN 0 ELSE 1 END)" for _ in parole])
         
         query_sql = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} ORDER BY {ordinamento}, id ASC LIMIT 15"
@@ -137,26 +137,21 @@ def cerca_espansa_per_gemini(query_utente):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Pulizia mirata delle query: prendiamo solo record altamente coerenti per non intasare l'AI
     if is_giallo:
-        cursor.execute("""
-            SELECT testo_completo FROM libri WHERE 
-            (testo_normalizzato LIKE '%adler olsen%' OR testo_normalizzato LIKE '%gialloparma%' OR testo_normalizzato LIKE '%signora in giallo%')
-            OR (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%delitto%' OR testo_normalizzato LIKE '%thriller%'))
-            LIMIT 20
-        """)
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%thriller%' OR testo_normalizzato LIKE '%adler olsen%' LIMIT 25")
     elif is_rosa:
+        # Recupero mirato basato sul testo: prendiamo direttamente le autrici chiave e i romanzi d'amore per evitare Barbero o Baricco
         cursor.execute("""
             SELECT testo_completo FROM libri WHERE 
             testo_normalizzato LIKE '%modignani%' OR 
             testo_normalizzato LIKE '%steel%' OR 
             testo_normalizzato LIKE '%adrian%' OR 
             testo_normalizzato LIKE '%sparks%' OR 
-            (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%' OR testo_normalizzato LIKE '%lettrice di romanzi%'))
-            LIMIT 20
+            (testo_normalizzato LIKE '%romanzo%' AND (testo_normalizzato LIKE '%amor%' OR testo_normalizzato LIKE '%rosa%'))
+            LIMIT 25
         """)
     elif is_bullismo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' LIMIT 20")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 20")
     elif is_cucina:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 20")
     elif is_territorio:
@@ -166,9 +161,9 @@ def cerca_espansa_per_gemini(query_utente):
         if parole:
             condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
             parametri = [f"%{p}%" for p in parole]
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 20", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri LIMIT 20")
+            cursor.execute("SELECT testo_completo FROM libri LIMIT 25")
             
     righe = cursor.fetchall()
     conn.close()
@@ -201,7 +196,7 @@ def genera_risposta_diretta(elenco_libri):
 
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
-        return "Gentile utente, non ho trovato materiale sufficiente nel catalogo per elaborare una bibliografia tematica su questo argomento." + NOTABENE_INFO
+        return "Gentile utente, non ho trovato materiale sufficiente nel catalogo per elaborare una bibliografia tematica." + NOTABENE_INFO
 
     elenco_essenziale = []
     for blocco in testi_libri:
@@ -212,41 +207,42 @@ def ask_gemini(user_message, testi_libri):
     elenco_essenziale = list(set(elenco_essenziale))
     context = "\n".join([f"- {item}" for item in elenco_essenziale])
     
+    # Il prompt originale e strutturato che ha generato la risposta "intelligente"
     prompt_completo = (
-        "Sei il Consulente Bibliografico della Biblioteca Belvedere di Siracusa.\n"
-        "Genera una BIBLIOGRAFIA RAGIONATA accogliente e colta basandoti SOLO sulla lista di libri fornita sotto.\n\n"
-        f"Richiesta del lettore: '{user_message}'\n\n"
-        "REGOLE DI SCRITTURA:\n"
-        "1. Organizza i libri dividendoli chiaramente per aree tematiche coerenti (es. Ambientazione Storica, Suspense e Sentiment, Grandi Autrici Contemporanee, ecc.).\n"
-        "2. Per ogni libro indica: Titolo, Autore, Collocazione ed un commento critico ed editoriale raffinato.\n"
-        "3. Includi rigorosamente le autrici di punta del genere richiesto presenti nell'elenco (come Sveva Casati Modignani, Lara Adrian o Danielle Steel).\n"
-        "4. Non inserire l'indirizzo della biblioteca o saluti finali standard alla fine della risposta."
+        "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
+        "Accogli il lettore con grazia e formula una splendida BIBLIOGRAFIA TEMATICA RAGIONATA basandoti ESCLUSIVAMENTE sui libri forniti nell'elenco in basso.\n\n"
+        f"Richiesta dell'utente: '{user_message}'\n\n"
+        "REGOLE DI STRUTTURA:\n"
+        "1. Inizia con un'introduzione calorosa ed elegante rivolta al lettore della biblioteca.\n"
+        "2. RAGGRUPPA I ROMANZI IN CATEGORIE TEMATICHE O AMBIENTAZIONI STORICHE (es. Romance Contemporaneo, Grandi Autrici, Romanzi Storici d'Amore, ecc.).\n"
+        "3. Per ogni libro inserisci un punto elenco con Titolo, Autore, Collocazione e una breve descrizione affascinante dedotta dai dati.\n"
+        "4. Metti in forte evidenza le opere di Sveva Casati Modignani o Danielle Steel se appaiono nell'elenco.\n"
+        "5. Ignora del tutto i libri estranei all'argomento.\n"
+        "6. Non inserire orari o firme standard alla fine."
     )
 
-    # Nuovo schema di payload iper-veloce e leggero per azzerare i tempi di attesa ed evitare i timeout
+    # Payload pulito e privo di tag superflui (evita i blocchi di errore di Google)
     payload = {
         "contents": [{
-            "parts": [{"text": f"{prompt_completo}\n\nLIBRI DISPONIBILI:\n{context}"}]
+            "parts": [{"text": f"{prompt_completo}\n\nELENCO LIBRI DISPONIBILI:\n{context}"}]
         }],
         "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 1000
+            "temperature": 0.3
         }
     }
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
+        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
         if response.status_code == 200:
             res_json = response.json()
             if 'candidates' in res_json and len(res_json['candidates']) > 0:
                 testo_risposta = res_json['candidates'][0]['content']['parts'][0]['text']
-                if testo_risposta and len(testo_risposta.strip()) > 40:
+                if testo_risposta and len(testo_risposta.strip()) > 50:
                     return testo_risposta + NOTABENE_INFO
-    except:
+    except Exception as e:
         pass
 
-    # Se fallisce per qualsiasi motivo (compreso timeout), restituisce la lista ordinata pulita
     return genera_risposta_diretta(testi_libri)
 
 def send_telegram_with_buttons(chat_id, text):
@@ -274,14 +270,14 @@ def esegui_bivio_ricerca(chat_id, modalita, query_originale):
         if modalita == "MODE_DIRETTA":
             libri = cerca_diretta_catalogo(query_originale)
             risposta = genera_risposta_diretta(libri)
-            send_telegram(chat_id, risposta)
+            send_telegram(chat_id, respuesta)
         elif modalita == "MODE_SEMANTICA":
             send_telegram(chat_id, "🔄 Sto elaborando una bibliografia tematica con l'ausilio dell'Intelligenza Artificiale...")
             libri = cerca_espansa_per_gemini(query_originale)
             risposta = ask_gemini(query_originale, libri)
             send_telegram(chat_id, risposta)
     except Exception as e:
-        send_telegram(chat_id, "Errore temporaneo di comunicazione. Il bibliotecario in sede rimane a disposizione.")
+        send_telegram(chat_id, "Errore di elaborazione. Il catalogo rimane a disposizione.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
@@ -302,7 +298,7 @@ def telegram_webhook():
             if query_originale:
                 Thread(target=esegui_bivio_ricerca, args=(chat_id, modalita, query_originale)).start()
             else:
-                send_telegram(chat_id, "Sessione scaduta o ricerca già effettuata. Digita una nuova richiesta.")
+                send_telegram(chat_id, "Sessione scaduta. Ripeti la ricerca.")
             return "OK", 200
 
         if "message" in data:
@@ -310,7 +306,7 @@ def telegram_webhook():
             text = data["message"].get("text", "").strip()
             
             if text == "/start":
-                send_telegram(chat_id, "Benvenuto alla Biblioteca Belvedere! Inviami il testo o l'argomento che desideri cercare.")
+                send_telegram(chat_id, "Benvenuto alla Biblioteca Belvedere! Mandami pure la tua richiesta.")
             elif chat_id and text:
                 imposta_stato(chat_id, text)
                 send_telegram_with_buttons(chat_id, text)
