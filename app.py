@@ -66,7 +66,7 @@ def inizializza_database():
             
         pezzi_raw = contenuto_txt.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenido_txt.split("\n\n")
+            pezzi_raw = contenuto_txt.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -212,11 +212,10 @@ def ask_gemini(chat_id, user_message, testi_libri):
         f"Richiesta dell'utente: '{user_message}'\n\n"
         "REGOLE DI STRUTTURA:\n"
         "1. Inizia con un'introduzione calorosa ed elegante rivolta al lettore della biblioteca.\n"
-        "2. RAGGRUPPA I ROMANZI IN CATEGORIE TEMATICHE O AMBIENTAZIONI STORICHE (es. Romance Contemporaneo, Grandi Autrici, Romanzi Storici d'Amore, ecc.).\n"
+        "2. RAGGRUPPA I ROMANZI IN CATEGORIE TEMATICHE O AMBIENTAZIONI (es. Suspense d'Autore, Noir Contemporaneo, Giallo Classico, ecc.).\n"
         "3. Per ogni libro inserisci un punto elenco con Titolo, Autore, Collocazione e una breve descrizione affascinante dedotta dai dati.\n"
-        "4. Metti in forte evidenza le opere di Sveva Casati Modignani o Danielle Steel se appaiono nell'elenco.\n"
-        "5. Ignora del tutto i libri estranei all'argomento.\n"
-        "6. Non inserire orari o firme standard alla fine."
+        "4. Ignora del tutto i libri estranei all'argomento richiesto.\n"
+        "5. Non inserire orari o firme standard alla fine."
     )
 
     payload = {
@@ -229,7 +228,8 @@ def ask_gemini(chat_id, user_message, testi_libri):
     }
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # CORREZIONE ENDPOINT: Usiamo l'URL ufficiale v1/models/gemini-1.5-flash:generateContent corretto per evitare il 404
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
         
         if response.status_code == 200:
@@ -239,10 +239,10 @@ def ask_gemini(chat_id, user_message, testi_libri):
                 if testo_risposta and len(testo_risposta.strip()) > 50:
                     return testo_risposta + NOTABENE_INFO
         else:
-            # Inviamo una notifica trasparente a Telegram per capire subito il codice di errore di Google
-            requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Nota tecnica: Google Gemini ha risposto con errore HTTP {response.status_code}"})
+            # Se Google risponde ancora picche, stampiamo l'errore per trasparenza
+            requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Errore di comunicazione con Google Gemini (Codice {response.status_code}). Generazione automatica della lista del catalogo..."})
     except Exception as e:
-        requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Nota tecnica errore eccezione: {str(e)}"})
+        pass
 
     return genera_risposta_diretta(testi_libri)
 
@@ -274,7 +274,7 @@ def esegui_bivio_ricerca(chat_id, modalita, query_originale):
     elif modalita == "MODE_SEMANTICA":
         send_telegram(chat_id, "🔄 Sto elaborando una bibliografia tematica con l'ausilio dell'Intelligenza Artificiale...")
         libri = cerca_espansa_per_gemini(query_originale)
-        risposta = ask_gemini(chat_id, query_originale, libri) # Passiamo chat_id per i log di debug
+        risposta = ask_gemini(chat_id, query_originale, libri)
         send_telegram(chat_id, risposta)
 
 @app.route("/webhook_biblioteca", methods=["POST"])
@@ -318,7 +318,7 @@ def setup():
     try:
         render_url = request.host_url.rstrip("/")
         requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{render_url}/webhook_biblioteca"}, timeout=10)
-        tele_res = "Webhook registrato con successo."
+        tele_res = "Webhook registered successfully."
     except Exception as e: tele_res = str(e)
     return jsonify({"status": res, "telegram_response": tele_res})
 
