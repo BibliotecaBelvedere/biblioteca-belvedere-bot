@@ -14,7 +14,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 DB_FILE = "catalogo.db"
 
-STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova', 'dai', 'libri', 'sul', 'sui', 'cerchi'}
+STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova', 'dai', 'libri', 'sul', 'sui', 'cerchi', 'romanzi', 'romanzo'}
 
 NOTABENE_INFO = (
     "\n\n_Nota: La consultazione online offre una panoramica parziale. Ti invitiamo a recarti presso la "
@@ -64,7 +64,7 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenido.split("[nd]") if 'contenido' in locals() else contenuto.split("[nd]")
+        pezzi_raw = contenuto.split("[nd]")
         if len(pezzi_raw) <= 1:
             pezzi_raw = contenuto.split("\n\n")
             
@@ -110,13 +110,20 @@ def cerca_diretta_catalogo(query_utente):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
-    parametri = [f"%{p}%" for p in parole]
-    
-    if condizioni:
-        cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 15", parametri)
+    # Per dare priorità agli autori veri, ordiniamo i risultati:
+    # Mettiamo in cima i libri dove la parola cercata appare all'inizio della scheda (posizione inferiore del LIKE)
+    if parole:
+        condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
+        parametri = [f"%{p}%" for p in parole]
+        # Aggiungiamo i parametri anche per la clausola ORDER BY (uno per ogni parola)
+        parametri_completi = parametri + [f"{p}%" for p in parole]
+        
+        ordinamento = " + ".join([f"(CASE WHEN testo_normalizzato LIKE ? THEN 0 ELSE 1 END)" for _ in parole])
+        
+        query_sql = f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} ORDER BY {ordinamento}, id ASC LIMIT 15"
+        cursor.execute(query_sql, parametri_completi)
     else:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE ? LIMIT 15", (f"%{q}%",))
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE ? ORDER BY (CASE WHEN testo_normalizzato LIKE ? THEN 0 ELSE 1 END), id ASC LIMIT 15", (f"%{q}%", f"{q}%"))
         
     righe = cursor.fetchall()
     conn.close()
@@ -150,10 +157,10 @@ def cerca_espansa_per_gemini(query_utente):
     elif is_territorio:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia locale%' LIMIT 25")
     else:
+        # Se l'utente scrive "romanzi di vittorini", estraiamo "vittorini" (grazie alle nuove STOPWORDS che includono "romanzi")
         parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
-        condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
-        parametri = [f"%{p}%" for p in parole]
-        if condizioni:
+        if condizioni := ["testo_normalizzato LIKE ?" for _ in parole]:
+            parametri = [f"%{p}%" for p in parole]
             cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25", parametri)
         else:
             cursor.execute("SELECT testo_completo FROM libri LIMIT 25")
@@ -188,6 +195,9 @@ def genera_risposta_diretta(elenco_libri):
     return testo_risposta
 
 def ask_gemini(user_message, testi_libri):
+    if not testi_libri:
+        return "Gentile utente, non ho trovato materiale sufficiente nel catalogo per elaborare una bibliografia tematica su questo argomento." + NOTABENE_INFO
+
     elenco_essenziale = []
     for blocco in testi_libri:
         riga_snella = estrai_essenziale_libro(blocco)
@@ -202,9 +212,9 @@ def ask_gemini(user_message, testi_libri):
         "Il tuo compito è formulare una colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA rispondendo alla richiesta tematica del lettore basandoti INTEGRAMENTE sulla lista di libri forniti in basso.\n\n"
         f"L'utente richiede informazioni su questo argomento/genere: '{user_message}'\n\n"
         "REGOLE TASSATIVE DI SCRITTURA:\n"
-        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più strettamente attinenti estratti dalla lista. Se l'utente cerca il bullismo e nella lista c'è un libro focalizzato (es. 'Io ero un bullo'), mettilo in primissimo piano e valorizzalo.\n"
+        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più strettamente attinenti estratti dalla lista.\n"
         "2. Per ogni libro consigliato specifica chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati forniti.\n"
-        "3. Formula la risposta con uno stile professionale ed editoriale da bibliotecario espresso. Se un libro dell'elenco ti sembra totalmente fuori tema, ignoralo senza menzionarlo.\n"
+        "3. Formula la risposta con uno stile professionale ed editoriale da bibliotecario esperto. Se un libro dell'elenco ti sembra totalmente fuori tema, ignoralo senza menzionarlo.\n"
         "4. Non aggiungere note standard alla fine perché l'orario e l'indirizzo della biblioteca vengono già accodati automaticamente dal sistema operativo del bot."
     )
 
@@ -237,17 +247,16 @@ def ask_gemini(user_message, testi_libri):
     return genera_risposta_diretta(testi_libri)
 
 def send_telegram_with_buttons(chat_id, text):
-    # MIGLIORAMENTO: Pulsanti disposti in VERTICALE (uno sotto l'altro) e testi più snelli. 
-    # In questo modo sullo schermo dello smartphone la lettura sarà totale e pulita.
+    # Struttura verticale impeccabile con testi brevi chiesti da te: per Autore / per Argomento
     keyboard = {
         "inline_keyboard": [
-            [{"text": "🔍 Cerca Autore o Titolo specifico", "callback_data": "MODE_DIRETTA"}],
-            [{"text": "📚 Cerca per Argomento o Genere", "callback_data": "MODE_SEMANTICA"}]
+            [{"text": "🔍 Per Autore o Titolo", "callback_data": "MODE_DIRETTA"}],
+            [{"text": "📚 Per Argomento o Genere", "callback_data": "MODE_SEMANTICA"}]
         ]
     }
     payload = {
         "chat_id": chat_id,
-        "text": f"Ho ricevuto la tua richiesta per: *\"{text}\"*\n\nPer favore, specifica che tipo di ricerca desideri effettuare per ottimizzare i risultati:",
+        "text": f"Ho ricevuto la tua richiesta per: *\"{text}\"*\n\nPer favore, specifica come desideri effettuare la ricerca:",
         "parse_mode": "Markdown",
         "reply_markup": keyboard
     }
@@ -279,13 +288,11 @@ def telegram_webhook():
         if not data:
             return "OK", 200
             
-        # Gestione del pulsante cliccato (Callback Query)
         if "callback_query" in data:
             chat_id = data["callback_query"]["message"]["chat"]["id"]
             modalita = data["callback_query"]["data"]
             query_originale = leggi_e_cancella_stato(chat_id)
             
-            # Inviamo subito una conferma di ricezione click a Telegram per non far bloccare l'interfaccia
             try:
                 requests.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": data["callback_query"]["id"]}, timeout=5)
             except: pass
@@ -296,7 +303,6 @@ def telegram_webhook():
                 send_telegram(chat_id, "Sessione scaduta o ricerca già effettuata. Digita una nuova richiesta.")
             return "OK", 200
 
-        # Gestione del messaggio testuale normale
         if "message" in data:
             chat_id = data["message"]["chat"]["id"]
             text = data["message"].get("text", "").strip()
