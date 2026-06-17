@@ -29,15 +29,12 @@ def estrai_essenziale_libro(testo_blocco):
     testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
     
-    for pattern in [r'\d+\s+p\b', r';\s+\d+\s+cm', r'-\s+ISBN', r'\.\s+-\s+VIII']:
-        match = re.search(pattern, testo_pulito)
-        if match:
-            testo_pulito = testo_pulito[:match.start()]
-            break
-            
-    testo_pulito = testo_pulito.strip()
-    testo_pulito = re.sub(r'[\s\.\,\-\:\/]+$', '', testo_pulito)
-    testo_pulito = testo_pulito.replace(' - . -', '').replace('\\', '/').replace('"', "'")
+    # Taglio drastico e pulito per non appesantire l'IA
+    testo_pulito = re.split(r'\d+\s+p\b', testo_pulito)[0]
+    testo_pulito = re.split(r'-\s+ISBN\b', testo_pulito)[0]
+    testo_pulito = re.split(r';\s+\d+\s+cm', testo_pulito)[0]
+    
+    testo_pulito = testo_pulito.replace('\\', '/').replace('"', "'")
     return testo_pulito.strip()
 
 def inizializza_database():
@@ -55,11 +52,9 @@ def inizializza_database():
         cursor.execute('CREATE TABLE IF NOT EXISTS libri (id INTEGER PRIMARY KEY AUTOINCREMENT, testo_completo TEXT, testo_normalizzato TEXT)')
         cursor.execute("DELETE FROM libri")
         
-        # 1. Apertura file usando RIGOROSAMENTE 'contenuto'
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        # 2. Split eseguito RIGOROSAMENTE su 'contenuto' (Verificato!)
         pezzi_raw = contenuto.split("[nd]")
         if len(pezzi_raw) <= 1:
             pezzi_raw = contenuto.split("\n\n")
@@ -91,21 +86,22 @@ def cerca_nel_db(query):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
+    # Torniamo a dare un buon margine di scelta a Gemini (20 libri)
     if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 12")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 20")
     elif is_rosa:
-        cursor.execute("SELECT testo_completo FROM libri WHERE (testo_normalizzato LIKE '% romanzo %' AND testo_normalizzato LIKE '% amor %') OR testo_normalizzato LIKE '% modignani %' OR testo_normalizzato LIKE '% steel %' OR testo_normalizzato LIKE '% sparks %' OR testo_normalizzato LIKE '% romanzo rosa %' OR testo_normalizzato LIKE '% storia d amore %' LIMIT 12")
+        cursor.execute("SELECT testo_completo FROM libri WHERE (testo_normalizzato LIKE '% romanzo %' AND testo_normalizzato LIKE '% amor %') OR testo_normalizzato LIKE '% modignani %' OR testo_normalizzato LIKE '% steel %' OR testo_normalizzato LIKE '% sparks %' OR testo_normalizzato LIKE '% romanzo rosa %' OR testo_normalizzato LIKE '% storia d amore %' LIMIT 20")
     elif is_bullismo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 12")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 20")
     elif is_cucina:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 12")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 20")
     else:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 12", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 20", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri LIMIT 12")
+            cursor.execute("SELECT testo_completo FROM libri LIMIT 20")
             
     righe = cursor.fetchall()
     conn.close()
@@ -113,7 +109,7 @@ def cerca_nel_db(query):
 
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
-        return "Gentile utente, non ho trovato volumi corrispondenti nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa."
+        return "Gentile utente, non ho trovato volumi corrispondenti a questa tematica nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per verificare gli scaffali fisici."
 
     elenco_essenziale = []
     for blocco in testi_libri:
@@ -126,38 +122,46 @@ def ask_gemini(user_message, testi_libri):
     
     prompt_completo = (
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
-        "Il tuo scopo è formulare una breve ed elegante RISPOSTA DISCORSIVA E CONSULENZIALE basandoti sui libri forniti nell'elenco in basso.\n\n"
+        "Il tuo scopo è formulare una breve, colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA basandoti sui libri forniti nell'elenco in basso.\n\n"
         f"L'utente richiede: '{user_message}'\n\n"
-        "REGOLE DI SCRITTURA:\n"
-        "1. Offri un testo fluido, accogliente e da bibliotecario. Introduci l'argomento ed elenca i libri rilevanti estratti dalla lista.\n"
-        "2. Per ogni libro consigliato scrivi chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati.\n"
-        "3. Mantieni un tono professionale, colto ed editoriale.\n"
-        "4. Concludi sempre invitando l'utente in sede a Siracusa per consultare il bibliotecario e visionare il catalogo completo."
+        "REGOLE TASSATIVE DI SCRITTURA:\n"
+        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più rilevanti estratti dalla lista.\n"
+        "2. Per ogni libro consigliato estrai chiaramente Titolo, Autore e Collocazione leggendoli dai dati forniti.\n"
+        "3. Formula la risposta con uno stile professionale ed editoriale. Se un libro dell'elenco ti sembra fuori tema (un intruso), ignoralo e non inserirlo nella selezione.\n"
+        "4. Includi SEMPRE alla fine una nota che indica che la risposta è parziale e invita a consultare il bibliotecario in sede a Siracusa per informazioni complete e approfondimenti."
     )
 
+    # Configurazione di ripristino per Gemini 2.5 con sblocco totale dei filtri di sicurezza (Safety Settings)
     payload = {
         "contents": [{
             "role": "user",
-            "parts": [{"text": f"{prompt_completo}\n\nELENCO LIBRI DISPONIBILI:\n{context}"}]
+            "parts": [{"text": f"{prompt_completo}\n\nELENCO SCHEDE DISPONIBILI:\n{context}"}]
         }],
         "generationConfig": {
-            "temperature": 0.2
-        }
+            "temperature": 0.3
+        },
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
     }
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=25)
         
         if response.status_code == 200:
             res_json = response.json()
             if 'candidates' in res_json and len(res_json['candidates']) > 0:
-                testo_ia = res_json['candidates'][0]['content']['parts'][0]['text']
-                if testo_ia and len(testo_ia.strip()) > 50:
-                    return testo_ia
+                testo_risposta = res_json['candidates'][0]['content']['parts'][0]['text']
+                if testo_risposta and len(testo_risposta.strip()) > 40:
+                    return testo_risposta
     except:
         pass
 
+    # Ruota di scorta se c'è un blocco di rete temporaneo
     linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Selezione Bibliografica**:\n", "Gentile utente, ecco i principali titoli attinenti individuati nel catalogo:\n"]
     for item in elenco_essenziale[:6]:
         linee_emergenza.append(f"• {item}")
@@ -174,7 +178,7 @@ def async_process_request(chat_id, text):
         reply = ask_gemini(text, libri_trovati)
         send_telegram(chat_id, reply)
     except:
-        send_telegram(chat_id, "Servizio momentaneamente in manutenzione. Il bibliotecario in sede a Siracusa rimane a disposizione.")
+        send_telegram(chat_id, "Servizio momentaneamente in manutenzione. Il bibliotecario in sede a Siracusa rimane a disposizione per qualsiasi ricerca.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
