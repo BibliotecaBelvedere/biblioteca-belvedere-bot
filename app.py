@@ -24,15 +24,12 @@ def normalize(s):
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
 def estrai_essenziale_libro(testo_blocco):
-    """Prende un intero blocco di catalogo e ne estrae SOLO Collocazione, Autore e Titolo, buttando via il resto per alleggerire l'IA"""
     if not testo_blocco:
         return ""
-    
-    # Uniamo le righe e puliamo gli spazi
     testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
     
-    # Tagliamo via le informazioni tipografiche e burocratiche (p., cm, ISBN, collane)
+    # Taglio drastico della spazzatura per velocizzare l'IA
     testo_pulito = re.split(r'\d+\s+p\b', testo_pulito)[0]
     testo_pulito = re.split(r'-\s+ISBN\b', testo_pulito)[0]
     testo_pulito = re.split(r';\s+\d+\s+cm', testo_pulito)[0]
@@ -58,10 +55,9 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        # CORRETTO: Adesso usiamo la variabile giusta 'contenuto'
-        pezzi_raw = contenuto.split("[nd]")
+        pezzi_raw = contenido.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenuto.split("\n\n")
+            pezzi_raw = contenido.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -90,21 +86,22 @@ def cerca_nel_db(query):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
+    # OTTIMIZZAZIONE: Abbassiamo il LIMIT a 12/15 elementi per non far andare mai l'IA in timeout
     if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 25")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 12")
     elif is_rosa:
-        cursor.execute("SELECT testo_completo FROM libri WHERE (testo_normalizzato LIKE '% romanzo %' AND testo_normalizzato LIKE '% amor %') OR testo_normalizzato LIKE '% modignani %' OR testo_normalizzato LIKE '% steel %' OR testo_normalizzato LIKE '% sparks %' OR testo_normalizzato LIKE '% romanzo rosa %' OR testo_normalizzato LIKE '% storia d amore %' LIMIT 25")
+        cursor.execute("SELECT testo_completo FROM libri WHERE (testo_normalizzato LIKE '% romanzo %' AND testo_normalizzato LIKE '% amor %') OR testo_normalizzato LIKE '% modignani %' OR testo_normalizzato LIKE '% steel %' OR testo_normalizzato LIKE '% sparks %' OR testo_normalizzato LIKE '% romanzo rosa %' OR testo_normalizzato LIKE '% storia d amore %' LIMIT 12")
     elif is_bullismo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 25")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%scuola%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 12")
     elif is_cucina:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 25")
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%artusi%' LIMIT 12")
     else:
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 25", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 15", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri LIMIT 15")
+            cursor.execute("SELECT testo_completo FROM libri LIMIT 12")
             
     righe = cursor.fetchall()
     conn.close()
@@ -162,10 +159,8 @@ def ask_gemini(user_message, testi_libri):
     return "\n".join(linee_emergenza)
 
 def send_telegram(chat_id, text):
-    try:
-        requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
-    except:
-        pass
+    try: requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
+    except: pass
 
 def async_process_request(chat_id, text):
     try:
