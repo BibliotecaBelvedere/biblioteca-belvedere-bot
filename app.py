@@ -66,7 +66,7 @@ def inizializza_database():
             
         pezzi_raw = contenuto_txt.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenuto_txt.split("\n\n")
+            pezzi_raw = contenido_txt.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -193,7 +193,7 @@ def genera_risposta_diretta(elenco_libri):
     testo_risposta += NOTABENE_INFO
     return testo_risposta
 
-def ask_gemini(user_message, testi_libri):
+def ask_gemini(chat_id, user_message, testi_libri):
     if not testi_libri:
         return "Gentile utente, non ho trovato materiale sufficiente nel catalogo per elaborare una bibliografia tematica." + NOTABENE_INFO
 
@@ -211,7 +211,7 @@ def ask_gemini(user_message, testi_libri):
         "Accogli il lettore con grazia e formula una splendida BIBLIOGRAFIA TEMATICA RAGIONATA basandoti ESCLUSIVAMENTE sui libri forniti nell'elenco in basso.\n\n"
         f"Richiesta dell'utente: '{user_message}'\n\n"
         "REGOLE DI STRUTTURA:\n"
-        "1. Inicia con un'introduzione calorosa ed elegante rivolta al lettore della biblioteca.\n"
+        "1. Inizia con un'introduzione calorosa ed elegante rivolta al lettore della biblioteca.\n"
         "2. RAGGRUPPA I ROMANZI IN CATEGORIE TEMATICHE O AMBIENTAZIONI STORICHE (es. Romance Contemporaneo, Grandi Autrici, Romanzi Storici d'Amore, ecc.).\n"
         "3. Per ogni libro inserisci un punto elenco con Titolo, Autore, Collocazione e una breve descrizione affascinante dedotta dai dati.\n"
         "4. Metti in forte evidenza le opere di Sveva Casati Modignani o Danielle Steel se appaiono nell'elenco.\n"
@@ -231,14 +231,18 @@ def ask_gemini(user_message, testi_libri):
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
+        
         if response.status_code == 200:
             res_json = response.json()
             if 'candidates' in res_json and len(res_json['candidates']) > 0:
                 testo_risposta = res_json['candidates'][0]['content']['parts'][0]['text']
                 if testo_risposta and len(testo_risposta.strip()) > 50:
                     return testo_risposta + NOTABENE_INFO
+        else:
+            # Inviamo una notifica trasparente a Telegram per capire subito il codice di errore di Google
+            requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Nota tecnica: Google Gemini ha risposto con errore HTTP {response.status_code}"})
     except Exception as e:
-        print(f"Errore chiamata Gemini: {str(e)}")
+        requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Nota tecnica errore eccezione: {str(e)}"})
 
     return genera_risposta_diretta(testi_libri)
 
@@ -263,7 +267,6 @@ def send_telegram(chat_id, text):
     except: pass
 
 def esegui_bivio_ricerca(chat_id, modalita, query_originale):
-    # Raddrizzato l'ingranaggio: tolto il finto blocco di catch che faceva fare i passi indietro
     if modalita == "MODE_DIRETTA":
         libri = cerca_diretta_catalogo(query_originale)
         risposta = genera_risposta_diretta(libri)
@@ -271,7 +274,7 @@ def esegui_bivio_ricerca(chat_id, modalita, query_originale):
     elif modalita == "MODE_SEMANTICA":
         send_telegram(chat_id, "🔄 Sto elaborando una bibliografia tematica con l'ausilio dell'Intelligenza Artificiale...")
         libri = cerca_espansa_per_gemini(query_originale)
-        risposta = ask_gemini(query_originale, libri)
+        risposta = ask_gemini(chat_id, query_originale, libri) # Passiamo chat_id per i log di debug
         send_telegram(chat_id, risposta)
 
 @app.route("/webhook_biblioteca", methods=["POST"])
