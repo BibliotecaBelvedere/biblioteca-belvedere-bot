@@ -24,17 +24,22 @@ def normalize(s):
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
 def estrai_essenziale_libro(testo_blocco):
+    """Pulisce il blocco eliminando i dati tipografici pesanti senza rompere la struttura"""
     if not testo_blocco:
         return ""
+    # Rimuove i ritorni a capo
     testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
     
-    # Taglio drastico delle informazioni tipografiche per non appesantire il prompt
-    testo_pulito = re.split(r'\d+\s+p\b', testo_pulito)[0]
-    testo_pulito = re.split(r'-\s+ISBN\b', testo_pulito)[0]
-    testo_pulito = re.split(r';\s+\d+\s+cm', testo_pulito)[0]
-    
-    testo_pulito = testo_pulito.replace('\\', '/').replace('"', "'")
+    # Taglio morbido: togliamo le info dopo le pagine o i centimetri se presenti
+    for pattern in [r'\d+\s+p\b', r';\s+\d+\s+cm', r'-\s+ISBN']:
+        match = re.search(pattern, testo_pulito)
+        if match:
+            testo_pulito = testo_pulito[:match.start()]
+            break
+            
+    # Sanificazione totale per i fieri nemici del formato JSON
+    testo_pulito = testo_pulito.replace('\\', '/').replace('"', "'").replace('\t', ' ')
     return testo_pulito.strip()
 
 def inizializza_database():
@@ -55,10 +60,9 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        # CORREZIONE COMPLETA: 'contenuto' con la 'u' ovunque
         pezzi_raw = contenuto.split("[nd]")
         if len(pezzi_raw) <= 1:
-            pezzi_raw = contenuto.split("\n\n")
+            pezzi_raw = contenido.split("\n\n")
             
         blocchi_effettivi = []
         for pezzo in pezzi_raw:
@@ -87,7 +91,6 @@ def cerca_nel_db(query):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # LIMIT ottimizzati a 12/15 elementi per evitare timeout di Gemini
     if is_giallo:
         cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%christie%' OR testo_normalizzato LIKE '%simenon%' OR testo_normalizzato LIKE '%camilleri%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%adler%' LIMIT 12")
     elif is_rosa:
@@ -100,7 +103,7 @@ def cerca_nel_db(query):
         condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
         parametri = [f"%{p}%" for p in parole]
         if condizioni:
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 15", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' AND '.join(condizioni)} LIMIT 12", parametri)
         else:
             cursor.execute("SELECT testo_completo FROM libri LIMIT 12")
             
@@ -110,7 +113,7 @@ def cerca_nel_db(query):
 
 def ask_gemini(user_message, testi_libri):
     if not testi_libri:
-        return "Gentile utente, non ho trovato volumi corrispondenti a questa tematica nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa per verificare gli scaffali fisici."
+        return "Gentile utente, non ho trovato volumi corrispondenti nel catalogo digitale. Ti invitiamo a consultare il bibliotecario in sede a Siracusa."
 
     elenco_essenziale = []
     for blocco in testi_libri:
@@ -123,36 +126,38 @@ def ask_gemini(user_message, testi_libri):
     
     prompt_completo = (
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
-        "Il tuo scopo è formulare una breve, colta ed elegante BIBLIOGRAFIA RAGIONATA E CRITICA basandoti sui libri forniti nell'elenco in basso.\n\n"
+        "Il tuo compito è formulare una breve ed elegante RISPOSTA DISCORSIVA E CONSULENZIALE basandoti sui libri forniti nell'elenco in basso.\n\n"
         f"L'utente richiede: '{user_message}'\n\n"
-        "REGOLE TASSATIVE DI SCRITTURA:\n"
-        "1. Offri una risposta fluida, accogliente e discorsiva. Introduci l'argomento ed elenca i libri più rilevanti estratti dalla lista.\n"
-        "2. Per ogni libro consigliato estrai chiaramente Titolo, Autore e Collocazione leggendoli dai dati forniti.\n"
-        "3. Formula la risposta con uno stile professionale ed editoriale.\n"
-        "4. Includi SEMPRE alla fine una nota che indica che la risposta è parziale e invita a consultare il bibliotecario in sede a Siracusa per informazioni complete e approfondimenti."
+        "REGOLE DI SCRITTURA:\n"
+        "1. Offri un testo fluido, accogliente e da bibliotecario. Introduci l'argomento ed elenca i libri rilevanti estratti dalla lista.\n"
+        "2. Per ogni libro menzionato scrivi chiaramente Titolo, Autore e Collocazione prendendoli dai dati forniti.\n"
+        "3. Se un libro è un 'intruso' (es. un romanzo ambientato in cucina invece di un ricettario), puoi comunque menzionarlo nel discorso in modo ironico o originale.\n"
+        "4. Concludi SEMPRE invitando l'utente in sede a Siracusa per consultare il bibliotecario e visionare il catalogo completo."
     )
 
     payload = {
         "contents": [{
-            "role": "user",
-            "parts": [{"text": f"{prompt_completo}\n\nELENCO SCHEDE DISPONIBILI:\n{context}"}]
+            "parts": [{"text": f"{prompt_completo}\n\nELENCO LIBRI DISPONIBILI:\n{context}"}]
         }],
         "generationConfig": {
-            "temperature": 0.3
+            "temperature": 0.2
         }
     }
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
+        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=25)
         
         if response.status_code == 200:
             res_json = response.json()
             if 'candidates' in res_json and len(res_json['candidates']) > 0:
-                return res_json['candidates'][0]['content']['parts'][0]['text']
+                testo_ia = res_json['candidates'][0]['content']['parts'][0]['text']
+                if testo_ia and len(testo_ia.strip()) > 50:
+                    return testo_ia
     except:
         pass
 
+    # Ripiego di emergenza ultra-pulito se le API di Google vanno in blocco
     linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Selezione Bibliografica**:\n", "Gentile utente, ecco i principali titoli attinenti individuati nel catalogo:\n"]
     for item in elenco_essenziale[:6]:
         linee_emergenza.append(f"• {item}")
@@ -169,7 +174,7 @@ def async_process_request(chat_id, text):
         reply = ask_gemini(text, libri_trovati)
         send_telegram(chat_id, reply)
     except:
-        send_telegram(chat_id, "Servizio momentaneamente in manutenzione. Il bibliotecario in sede a Siracusa rimane a disposizione per qualsiasi ricerca.")
+        send_telegram(chat_id, "Servizio momentaneamente in manutenzione. Il bibliotecario in sede a Siracusa rimane a disposizione.")
 
 @app.route("/webhook_biblioteca", methods=["POST"])
 def telegram_webhook():
