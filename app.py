@@ -24,22 +24,22 @@ def normalize(s):
     return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").split())
 
 def estrai_essenziale_libro(testo_blocco):
-    """Pulisce il blocco eliminando i dati tipografici pesanti senza rompere la struttura"""
     if not testo_blocco:
         return ""
-    # Rimuove i ritorni a capo
     testo_unito = testo_blocco.replace("\n", " ").replace("\r", " ")
     testo_pulito = re.sub(r'\s+', ' ', testo_unito).strip()
     
-    # Taglio morbido: togliamo le info dopo le pagine o i centimetri se presenti
-    for pattern in [r'\d+\s+p\b', r';\s+\d+\s+cm', r'-\s+ISBN']:
+    # Taglio posizionale basato sulle info tipografiche
+    for pattern in [r'\d+\s+p\b', r';\s+\d+\s+cm', r'-\s+ISBN', r'\.\s+-\s+VIII']:
         match = re.search(pattern, testo_pulito)
         if match:
             testo_pulito = testo_pulito[:match.start()]
             break
             
-    # Sanificazione totale per i fieri nemici del formato JSON
-    testo_pulito = testo_pulito.replace('\\', '/').replace('"', "'").replace('\t', ' ')
+    # Pulizia dei rimasugli di punteggiatura alla fine del troncamento
+    testo_pulito = testo_pulito.strip()
+    testo_pulito = re.sub(r'[\s\.\,\-\:\/]+$', '', testo_pulito)
+    testo_pulito = testo_pulito.replace(' - . -', '').replace('\\', '/').replace('"', "'")
     return testo_pulito.strip()
 
 def inizializza_database():
@@ -60,7 +60,7 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenuto.split("[nd]")
+        pezzi_raw = contenido.split("[nd]")
         if len(pezzi_raw) <= 1:
             pezzi_raw = contenido.split("\n\n")
             
@@ -130,13 +130,15 @@ def ask_gemini(user_message, testi_libri):
         f"L'utente richiede: '{user_message}'\n\n"
         "REGOLE DI SCRITTURA:\n"
         "1. Offri un testo fluido, accogliente e da bibliotecario. Introduci l'argomento ed elenca i libri rilevanti estratti dalla lista.\n"
-        "2. Per ogni libro menzionato scrivi chiaramente Titolo, Autore e Collocazione prendendoli dai dati forniti.\n"
-        "3. Se un libro è un 'intruso' (es. un romanzo ambientato in cucina invece di un ricettario), puoi comunque menzionarlo nel discorso in modo ironico o originale.\n"
-        "4. Concludi SEMPRE invitando l'utente in sede a Siracusa per consultare il bibliotecario e visionare il catalogo completo."
+        "2. Per ogni libro consigliato scrivi chiaramente Titolo, Autore e Collocazione leggendoli accuratamente dai dati.\n"
+        "3. Mantieni un tono professionale, colto ed editoriale.\n"
+        "4. Concludi sempre invitando l'utente in sede a Siracusa per consultare il bibliotecario e visionare il catalogo completo."
     )
 
+    # Payload con struttura standard compatibile al 100% con le API v1
     payload = {
         "contents": [{
+            "role": "user",
             "parts": [{"text": f"{prompt_completo}\n\nELENCO LIBRI DISPONIBILI:\n{context}"}]
         }],
         "generationConfig": {
@@ -145,7 +147,8 @@ def ask_gemini(user_message, testi_libri):
     }
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # Usiamo l'endpoint v1 stabile con il modello 1.5-flash
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=25)
         
         if response.status_code == 200:
@@ -157,7 +160,7 @@ def ask_gemini(user_message, testi_libri):
     except:
         pass
 
-    # Ripiego di emergenza ultra-pulito se le API di Google vanno in blocco
+    # Ripiego di emergenza se Google restituisce un errore di rete o di quota
     linee_emergenza = ["📚 **Biblioteca Belvedere (SBS0CB) - Selezione Bibliografica**:\n", "Gentile utente, ecco i principali titoli attinenti individuati nel catalogo:\n"]
     for item in elenco_essenziale[:6]:
         linee_emergenza.append(f"• {item}")
