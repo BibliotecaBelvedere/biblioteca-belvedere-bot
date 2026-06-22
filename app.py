@@ -17,7 +17,7 @@ DB_FILE = "catalogo.db"
 STOPWORDS = {'che', 'del', 'della', 'di', 'da', 'in', 'per', 'con', 'su', 'a', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'mi', 'ti', 'ci', 'cerca', 'cerco', 'trova', 'dai', 'libri', 'sul', 'sui', 'cerchi'}
 
 NOTABENE_INFO = (
-    "\n\n_Nota: La consultazione online offre unaoramica parziale. Ti invitiamo a recarti presso la "
+    "\n\n_Nota: La consultazione online offre una panoramica parziale. Ti invitiamo a recarti presso la "
     "Biblioteca Belvedere di Siracusa in piazza Eurialo 18, aperta dal lunedì al venerdì dalle 8.30 alle 13.15 "
     "e il martedì e giovedì anche nel pomeriggio dalle 15.00 alle 17.15, per consultare il bibliotecario e visionare le opere complete._"
 )
@@ -64,7 +64,7 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto_txt = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenuto_txt.split("[nd]")
+        pezzi_raw = contenido_txt.split("[nd]")
         if len(pezzi_raw) <= 1:
             pezzi_raw = contenuto_txt.split("\n\n")
             
@@ -127,30 +127,50 @@ def cerca_diretta_catalogo(query_utente):
 
 def cerca_espansa_per_gemini(query_utente):
     """
-    Riduciamo i filtri hardware a monte. Estraiamo un set molto più ampio (fino a 60 libri)
-    basato sulle parole chiave della richiesta dell'utente per dare all'AI materiale su cui lavorare probabilisticamente.
+    Scrematura semantica preliminare flessibile basata sul macro-contesto della richiesta.
+    Estrae al massimo 20-25 record per evitare blocchi e timeout delle API.
     """
     q = normalize(query_utente)
-    parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
+    
+    is_giallo = any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller", "assass", "delitt"])
+    is_rosa = any(g in q for g in ["rosa", "amor", "sentiment", "romant", "relazion", "bacio", "passion"])
+    is_bullismo = any(g in q for g in ["bullis", "bullo", "prevarica", "violenz"])
+    is_cucina = any(g in q for g in ["cucin", "ricett", "mangiar", "gastronom"])
+    is_territorio = any(g in q for g in ["territorio", "sicilia", "siracusa", "locale", "tradizion"])
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    if parole:
-        # Cerchiamo nel catalogo una platea di libri che contengono le parole o sinonimi generici
-        condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
-        parametri = [f"%{p}%" for p in parole]
-        
-        # Aggiungiamo anche una ricerca jolly sul genere se intercettato, per allargare il contesto
-        if any(r in q for r in ["rosa", "amor", "romant", "sentiment"]):
-            condizioni.append("testo_normalizzato LIKE '%romanzo%'")
-            condizioni.append("testo_normalizzato LIKE '%love%'")
-            
-        query_sql = f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 60"
-        cursor.execute(query_sql, parametri if len(parametri) == len(condizioni) else [f"%{p}%" for p in parole] + ["%romanzo%", "%love%"])
+    if is_giallo:
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%thriller%' OR testo_normalizzato LIKE '%delitto%' LIMIT 25")
+    elif is_rosa:
+        # Pescaggio ampio basato su concetti sfumati del genere romance, senza vincoli di autore fisso
+        cursor.execute("""
+            SELECT testo_completo FROM libri WHERE 
+            testo_normalizzato LIKE '%romanzo%' AND (
+                testo_normalizzato LIKE '%amor%' OR 
+                testo_normalizzato LIKE '%rosa%' OR 
+                testo_normalizzato LIKE '%bacio%' OR 
+                testo_normalizzato LIKE '%sentiment%' OR 
+                testo_normalizzato LIKE '%relazion%' OR
+                testo_normalizzato LIKE '%amante%'
+            ) LIMIT 25
+        """)
+    elif is_bullismo:
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 20")
+    elif is_cucina:
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 20")
+    elif is_territorio:
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' LIMIT 20")
     else:
-        cursor.execute("SELECT testo_completo FROM libri ORDER BY RANDOM() LIMIT 50")
-        
+        parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
+        if parole:
+            condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
+            parametri = [f"%{p}%" for p in parole]
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25", parametri)
+        else:
+            cursor.execute("SELECT testo_completo FROM libri ORDER BY id DESC LIMIT 20")
+            
     righe = cursor.fetchall()
     conn.close()
     return [r[0] for r in righe]
@@ -194,41 +214,40 @@ def ask_gemini(chat_id, user_message, testi_libri):
     context = "\n".join([f"- {item}" for item in elenco_essenziale])
     
     prompt_completo = (
-        "Sei l'esperto Consulente Bibliografico della Biblioteca Belvedere di Siracusa.\n"
-        "Il tuo compito è analizzare l'elenco di libri grezzi fornito e comporre una BIBLIOGRAFIA TEMATICA RAGIONATA rispondendo alla richiesta dell'utente.\n\n"
-        f"Richiesta dell'utente: '{user_message}'\n\n"
-        "REGOLE CRUCIALI DI SELEZIONE SEMANTICA:\n"
-        "1. Usa le tue capacità probabilistiche e di comprensione del testo: inserisci NELLA RISPOSTA solo ed esclusivamente i libri che appartengono davvero al genere richiesto dall'utente (es. se chiede romanzi rosa, seleziona solo storie d'amore, romance e romanzi sentimentali).\n"
-        "2. Ignora tassativamente i saggi, i libri di scienze, i gialli o i romanzi drammatici che non c'entrano nulla, anche se contengono la parola cercata nel titolo!\n"
-        "3. Seleziona al massimo 5-7 libri pertinenti tra quelli forniti.\n"
-        "4. Organizza la risposta in modo elegante: un'introduzione cortese, i libri scelti strutturati in punti elenco (con Titolo, Autore, Collocazione se presente, e un motivo affascinante per cui leggerlo).\n"
-        "5. Non inserire orari della biblioteca o firme standard alla fine del testo."
+        "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
+        "Analizza l'elenco di libri allegato e componi una BIBLIOGRAFIA TEMATICA RAGIONATA rispondendo alla richiesta dell'utente.\n\n"
+        f"Richiesta: '{user_message}'\n\n"
+        "REGOLE DI ELABORAZIONE SEMANTICA:\n"
+        "1. Usa il tuo discernimento probabilistico: inserisci solo i libri che sono VERAMENTE coerenti con la richiesta (es. romanzi rosa/storie d'amore). Scarta saggi, gialli o libri estranei anche se contengono frammenti di parole simili.\n"
+        "2. Seleziona un massimo di 5 titoli tra quelli forniti.\n"
+        "3. Scrivi un'introduzione accogliente e descrivi ogni libro in modo accattivante, indicando Titolo, Autore ed eventuale Collocazione.\n"
+        "4. Non firmarti e non inserire orari alla fine."
     )
 
     payload = {
         "contents": [{
-            "parts": [{"text": f"{prompt_completo}\n\nELENCO COMPLETO DEI LIBRI ESTRATTI DA VALUTARE:\n{context}"}]
+            "parts": [{"text": f"{prompt_completo}\n\nLIBRI DISPONIBILI:\n{context}"}]
         }],
         "generationConfig": {
-            "temperature": 0.2
+            "temperature": 0.3
         }
     }
 
     try:
-        # NUOVO ENDPOINT: Utilizziamo la v1beta con il path completo formattato esplicitamente per le chiamate REST standard
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=25)
+        # Aggiunto un timeout robusto ma contenuto a 15 secondi per preservare il ciclo vitale del server Flask
+        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         
         if response.status_code == 200:
             res_json = response.json()
             if 'candidates' in res_json and len(res_json['candidates']) > 0:
                 testo_risposta = res_json['candidates'][0]['content']['parts'][0]['text']
-                if testo_risposta and len(testo_risposta.strip()) > 50:
+                if testo_risposta and len(testo_risposta.strip()) > 30:
                     return testo_risposta + NOTABENE_INFO
         else:
-            requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Nota di debug: Google Gemini REST ha risposto con errore {response.status_code}. Mostro catalogo grezzo."})
+            requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Nota di debug: Errore API {response.status_code}"})
     except Exception as e:
-        requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Nota di errore connessione: {str(e)}"})
+        requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": f"⚠️ Nota di debug errore connessione: {str(e)}"})
 
     return genera_risposta_diretta(testi_libri)
 
