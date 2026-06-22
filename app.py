@@ -64,7 +64,7 @@ def inizializza_database():
         with open(file_reale, "r", encoding="utf-8-sig", errors="ignore") as f:
             contenuto_txt = f.read().replace("\r\n", "\n").replace("\u00a0", "\n")
             
-        pezzi_raw = contenido_txt.split("[nd]")
+        pezzi_raw = contenuto_txt.split("[nd]")
         if len(pezzi_raw) <= 1:
             pezzi_raw = contenuto_txt.split("\n\n")
             
@@ -127,49 +127,43 @@ def cerca_diretta_catalogo(query_utente):
 
 def cerca_espansa_per_gemini(query_utente):
     """
-    Scrematura semantica preliminare flessibile basata sul macro-contesto della richiesta.
-    Estrae al massimo 20-25 record per evitare blocchi e timeout delle API.
+    Pescaggio SQL a maglie larghissime (OR) per non rischiare mai liste vuote.
+    Genera un paniere assortito di circa 35-40 libri su cui l'AI applicherà la sua logica probabilistica.
     """
     q = normalize(query_utente)
-    
-    is_giallo = any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller", "assass", "delitt"])
-    is_rosa = any(g in q for g in ["rosa", "amor", "sentiment", "romant", "relazion", "bacio", "passion"])
-    is_bullismo = any(g in q for g in ["bullis", "bullo", "prevarica", "violenz"])
-    is_cucina = any(g in q for g in ["cucin", "ricett", "mangiar", "gastronom"])
-    is_territorio = any(g in q for g in ["territorio", "sicilia", "siracusa", "locale", "tradizion"])
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    if is_giallo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%thriller%' OR testo_normalizzato LIKE '%delitto%' LIMIT 25")
-    elif is_rosa:
-        # Pescaggio ampio basato su concetti sfumati del genere romance, senza vincoli di autore fisso
+    if any(g in q for g in ["giallo", "gialli", "noir", "poliziesc", "thriller", "assass", "delitt"]):
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%giallo%' OR testo_normalizzato LIKE '%gialli%' OR testo_normalizzato LIKE '%noir%' OR testo_normalizzato LIKE '%thriller%' OR testo_normalizzato LIKE '%delitto%' LIMIT 35")
+    elif any(g in q for g in ["rosa", "amor", "sentiment", "romant", "relazion", "bacio", "passion"]):
+        # Usiamo il costrutto OR ampio: basta una sola corrispondenza per entrare nel paniere che daremo a Gemini
         cursor.execute("""
             SELECT testo_completo FROM libri WHERE 
-            testo_normalizzato LIKE '%romanzo%' AND (
-                testo_normalizzato LIKE '%amor%' OR 
-                testo_normalizzato LIKE '%rosa%' OR 
-                testo_normalizzato LIKE '%bacio%' OR 
-                testo_normalizzato LIKE '%sentiment%' OR 
-                testo_normalizzato LIKE '%relazion%' OR
-                testo_normalizzato LIKE '%amante%'
-            ) LIMIT 25
+            testo_normalizzato LIKE '%rosa%' OR 
+            testo_normalizzato LIKE '%amor%' OR 
+            testo_normalizzato LIKE '%bacio%' OR 
+            testo_normalizzato LIKE '%romanzo%' OR 
+            testo_normalizzato LIKE '%sentiment%' OR
+            testo_normalizzato LIKE '%modignani%' OR
+            testo_normalizzato LIKE '%steel%'
+            LIMIT 40
         """)
-    elif is_bullismo:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%adolescen%' LIMIT 20")
-    elif is_cucina:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' LIMIT 20")
-    elif is_territorio:
-        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' LIMIT 20")
+    elif any(g in q for g in ["bullis", "bullo", "prevarica", "violenz"]):
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%bullis%' OR testo_normalizzato LIKE '%bullo%' OR testo_normalizzato LIKE '%adolescen%' OR testo_normalizzato LIKE '%scuola%' LIMIT 35")
+    elif any(g in q for g in ["cucin", "ricett", "mangiar", "gastronom"]):
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%cucin%' OR testo_normalizzato LIKE '%ricett%' OR testo_normalizzato LIKE '%piatti%' LIMIT 35")
+    elif any(g in q for g in ["territorio", "sicilia", "siracusa", "locale", "tradizion"]):
+        cursor.execute("SELECT testo_completo FROM libri WHERE testo_normalizzato LIKE '%sicili%' OR testo_normalizzato LIKE '%siracusa%' OR testo_normalizzato LIKE '%storia%' LIMIT 35")
     else:
         parole = [w for w in q.split() if w not in STOPWORDS and len(w) >= 2]
         if parole:
             condizioni = ["testo_normalizzato LIKE ?" for _ in parole]
             parametri = [f"%{p}%" for p in parole]
-            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 25", parametri)
+            cursor.execute(f"SELECT testo_completo FROM libri WHERE {' OR '.join(condizioni)} LIMIT 35", parametri)
         else:
-            cursor.execute("SELECT testo_completo FROM libri ORDER BY id DESC LIMIT 20")
+            cursor.execute("SELECT testo_completo FROM libri ORDER BY id DESC LIMIT 30")
             
     righe = cursor.fetchall()
     conn.close()
@@ -215,18 +209,19 @@ def ask_gemini(chat_id, user_message, testi_libri):
     
     prompt_completo = (
         "Sei il Consulente Bibliografico ufficiale della Biblioteca Belvedere di Siracusa.\n"
-        "Analizza l'elenco di libri allegato e componi una BIBLIOGRAFIA TEMATICA RAGIONATA rispondendo alla richiesta dell'utente.\n\n"
-        f"Richiesta: '{user_message}'\n\n"
-        "REGOLE DI ELABORAZIONE SEMANTICA:\n"
-        "1. Usa il tuo discernimento probabilistico: inserisci solo i libri che sono VERAMENTE coerenti con la richiesta (es. romanzi rosa/storie d'amore). Scarta saggi, gialli o libri estranei anche se contengono frammenti di parole simili.\n"
-        "2. Seleziona un massimo di 5 titoli tra quelli forniti.\n"
-        "3. Scrivi un'introduzione accogliente e descrivi ogni libro in modo accattivante, indicando Titolo, Autore ed eventuale Collocazione.\n"
-        "4. Non firmarti e non inserire orari alla fine."
+        "Analizza con attenzione l'elenco di libri fornito e componi una BIBLIOGRAFIA TEMATICA RAGIONATA rispondendo alla richiesta dell'utente.\n\n"
+        f"Richiesta dell'utente: '{user_message}'\n\n"
+        "REGOLE DI ELABORAZIONE SEMANTICA ED ESCLUSIONE:\n"
+        "1. Esercita il tuo discernimento probabilistico di intelligenza artificiale: inserisci nella bibliografia solo ed esclusivamente i libri che appartengono al genere richiesto (es. storie d'amore, romanzi rosa, narrativa sentimentale).\n"
+        "2. Ignora e scarta tassativamente saggi, libri di cucina, gialli storici o biografie drammatiche che non c'entrano con il filone sentimentale, anche se l'estrazione li ha inclusi nel mucchio.\n"
+        "3. Seleziona un massimo di 5-6 titoli pertinenti.\n"
+        "4. Redigi un'introduzione raffinata per il lettore e descrivi ogni libro selezionato (mostrando Titolo, Autore ed eventuale Collocazione).\n"
+        "5. Non firmarti e non inserire orari alla fine del testo."
     )
 
     payload = {
         "contents": [{
-            "parts": [{"text": f"{prompt_completo}\n\nLIBRI DISPONIBILI:\n{context}"}]
+            "parts": [{"text": f"{prompt_completo}\n\nELENCO COMPLETO DEI LIBRI DA VALUTARE:\n{context}"}]
         }],
         "generationConfig": {
             "temperature": 0.3
@@ -235,8 +230,7 @@ def ask_gemini(chat_id, user_message, testi_libri):
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        # Aggiunto un timeout robusto ma contenuto a 15 secondi per preservare il ciclo vitale del server Flask
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
+        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
         
         if response.status_code == 200:
             res_json = response.json()
